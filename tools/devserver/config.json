@@ -1,0 +1,21 @@
+{
+  "sourceSFTP": {
+    "host": "127.0.0.1",
+    "port": 2201,
+    "username": "demo",
+    "directory": "/outbox"
+  },
+  "targetSFTP": {
+    "host": "127.0.0.1",
+    "port": 2202,
+    "username": "demo",
+    "directory": "/inbox"
+  },
+  "backupDirectory": "/outbox/archive",
+  "pollInterval": 5,
+  "stableSeconds": 3,
+  "maxParallel": 2,
+  "logFile": "demo-data/logs/sftp-relay.log",
+  "historyFile": "demo-data/history.json",
+  "knownHostsFile": "demo-data/known_hosts"
+}

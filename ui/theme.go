@@ -15,40 +15,42 @@ var _ fyne.Theme = (*Theme)(nil)
 // Palette shared by custom widgets.
 var (
 	ColorAccent  = color.NRGBA{R: 16, G: 185, B: 129, A: 255} // emerald-500
-	ColorSuccess = color.NRGBA{R: 34, G: 197, B: 94, A: 255}
-	ColorWarning = color.NRGBA{R: 245, G: 158, B: 11, A: 255}
-	ColorError   = color.NRGBA{R: 239, G: 68, B: 68, A: 255}
-	ColorMuted   = color.NRGBA{R: 122, G: 133, B: 128, A: 255}
+	ColorSuccess = color.NRGBA{R: 34, G: 197, B: 94, A: 255}  // green-500
+	ColorWarning = color.NRGBA{R: 245, G: 158, B: 11, A: 255} // amber-500
+	ColorError   = color.NRGBA{R: 239, G: 68, B: 68, A: 255}  // red-500
+	ColorMuted      = color.NRGBA{R: 148, G: 163, B: 184, A: 255} // slate-400
+	ColorCard       = color.NRGBA{R: 21, G: 29, B: 42, A: 255}   // slate-800+
+	ColorForeground = color.NRGBA{R: 248, G: 250, B: 252, A: 255} // slate-50
 )
 
 func (Theme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 	switch name {
 	case theme.ColorNameBackground:
-		return color.NRGBA{R: 15, G: 19, B: 18, A: 255}
+		return color.NRGBA{R: 11, G: 15, B: 23, A: 255} // modern deep slate #0B0F17
 	case theme.ColorNameButton:
-		return color.NRGBA{R: 33, G: 41, B: 39, A: 255}
+		return color.NRGBA{R: 30, G: 41, B: 59, A: 255} // slate-800
 	case theme.ColorNameDisabledButton:
-		return color.NRGBA{R: 26, G: 31, B: 30, A: 255}
+		return color.NRGBA{R: 20, G: 27, B: 38, A: 255}
 	case theme.ColorNameDisabled:
-		return color.NRGBA{R: 86, G: 97, B: 93, A: 255}
+		return color.NRGBA{R: 100, G: 116, B: 139, A: 255} // slate-500
 	case theme.ColorNameForeground:
-		return color.NRGBA{R: 228, G: 236, B: 233, A: 255}
+		return color.NRGBA{R: 248, G: 250, B: 252, A: 255} // slate-50
 	case theme.ColorNameHover:
-		return color.NRGBA{R: 42, G: 54, B: 50, A: 255}
+		return color.NRGBA{R: 51, G: 65, B: 85, A: 255} // slate-700
 	case theme.ColorNameInputBackground:
-		return color.NRGBA{R: 23, G: 29, B: 28, A: 255}
+		return color.NRGBA{R: 17, G: 24, B: 39, A: 255} // slate-900
 	case theme.ColorNameInputBorder:
-		return color.NRGBA{R: 52, G: 64, B: 60, A: 255}
+		return color.NRGBA{R: 51, G: 65, B: 85, A: 255} // slate-700
 	case theme.ColorNamePlaceHolder:
-		return color.NRGBA{R: 104, G: 116, B: 112, A: 255}
+		return color.NRGBA{R: 148, G: 163, B: 184, A: 255}
 	case theme.ColorNamePrimary:
 		return ColorAccent
 	case theme.ColorNameScrollBar:
-		return color.NRGBA{R: 60, G: 74, B: 69, A: 200}
+		return color.NRGBA{R: 71, G: 85, B: 105, A: 180}
 	case theme.ColorNameSeparator:
-		return color.NRGBA{R: 36, G: 45, B: 42, A: 255}
+		return color.NRGBA{R: 30, G: 41, B: 59, A: 255}
 	case theme.ColorNameShadow:
-		return color.NRGBA{A: 90}
+		return color.NRGBA{A: 110}
 	case theme.ColorNameSuccess:
 		return ColorSuccess
 	case theme.ColorNameWarning:
@@ -56,13 +58,13 @@ func (Theme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 	case theme.ColorNameError:
 		return ColorError
 	case theme.ColorNameHeaderBackground:
-		return color.NRGBA{R: 20, G: 26, B: 24, A: 255}
+		return color.NRGBA{R: 17, G: 24, B: 39, A: 255}
 	case theme.ColorNameMenuBackground, theme.ColorNameOverlayBackground:
-		return color.NRGBA{R: 22, G: 28, B: 27, A: 250}
+		return color.NRGBA{R: 21, G: 29, B: 42, A: 252}
 	case theme.ColorNameSelection:
-		return color.NRGBA{R: 16, G: 185, B: 129, A: 60}
+		return color.NRGBA{R: 16, G: 185, B: 129, A: 70}
 	case theme.ColorNameFocus:
-		return color.NRGBA{R: 16, G: 185, B: 129, A: 170}
+		return color.NRGBA{R: 16, G: 185, B: 129, A: 190}
 	default:
 		return theme.DefaultTheme().Color(name, theme.VariantDark)
 	}
@@ -74,7 +76,7 @@ func (Theme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultThem
 func (Theme) Size(name fyne.ThemeSizeName) float32 {
 	switch name {
 	case theme.SizeNamePadding:
-		return 6
+		return 8
 	case theme.SizeNameText:
 		return 14
 	case theme.SizeNameHeadingText:

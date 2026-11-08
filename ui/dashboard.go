@@ -29,20 +29,50 @@ type transferRow struct {
 	bar *widget.ProgressBar
 }
 
+type serverStatusRow struct {
+	dot      *canvas.Circle
+	title    *widget.Label
+	subtitle *widget.Label
+	badge    *widget.Label
+	box      fyne.CanvasObject
+}
+
+func newServerStatusRow(title string) *serverStatusRow {
+	r := &serverStatusRow{
+		dot:      canvas.NewCircle(ColorMuted),
+		title:    widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		subtitle: widget.NewLabel("—"),
+		badge:    widget.NewLabelWithStyle("Idle", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
+	}
+	r.subtitle.Importance = widget.LowImportance
+	r.subtitle.Truncation = fyne.TextTruncateEllipsis
+	r.badge.Importance = widget.LowImportance
+
+	dotObj := container.NewGridWrap(fyne.NewSize(10, 10), r.dot)
+	header := container.NewBorder(nil, nil,
+		container.NewHBox(container.NewCenter(dotObj), r.title),
+		r.badge,
+	)
+	r.box = container.NewVBox(header, container.NewPadded(r.subtitle))
+	return r
+}
+
 type dashboard struct {
 	w       *Window
 	content fyne.CanvasObject
 
-	srcDot, dstDot, scanDot *canvas.Circle
-	srcText, dstText        *widget.Label
-	scanText, nextText      *widget.Label
-	delivered, failed, vol  *widget.Label
-	toggle, scan            *widget.Button
-	transfers               *fyne.Container
-	idle                    *widget.Label
-	rows                    map[string]*transferRow
-	feed                    []activity
-	feedList                *widget.List
+	srcRow, dstRow, scanRow *serverStatusRow
+
+	deliveredVal *canvas.Text
+	failedVal    *canvas.Text
+	volVal       *canvas.Text
+
+	toggle, scan *widget.Button
+	transfers    *fyne.Container
+	idle         *widget.Label
+	rows         map[string]*transferRow
+	feed         []activity
+	feedList     *widget.List
 
 	onStateChange func(running bool)
 	lastRunning   *bool
@@ -56,22 +86,14 @@ func newDashboard(w *Window) *dashboard {
 	return d
 }
 
-func dot() *canvas.Circle {
-	c := canvas.NewCircle(ColorMuted)
-	return c
-}
-
-func dotCell(c *canvas.Circle) fyne.CanvasObject {
-	return container.NewGridWrap(fyne.NewSize(12, 12), c)
-}
-
-func statCard(title string, value *widget.Label) fyne.CanvasObject {
-	value.TextStyle = fyne.TextStyle{Bold: true}
-	value.Alignment = fyne.TextAlignCenter
+func statCard(title string, val *canvas.Text) fyne.CanvasObject {
 	t := widget.NewLabel(title)
 	t.Alignment = fyne.TextAlignCenter
 	t.Importance = widget.LowImportance
-	return widget.NewCard("", "", container.NewVBox(value, t))
+	return widget.NewCard("", "", container.NewVBox(
+		container.NewCenter(val),
+		t,
+	))
 }
 
 func (d *dashboard) build() {
@@ -81,43 +103,58 @@ func (d *dashboard) build() {
 	title := canvas.NewText(AppName, ColorAccent)
 	title.TextSize = 24
 	title.TextStyle = fyne.TextStyle{Bold: true}
-	sub := widget.NewLabel("Moves new files from the source server to the target, verifies them, then archives the originals.")
+
+	vBadge := canvas.NewText(" "+d.w.version+" ", ColorSuccess)
+	vBadge.TextSize = 13
+	vBadge.TextStyle = fyne.TextStyle{Bold: true}
+	titleRow := container.NewHBox(title, container.NewCenter(vBadge))
+
+	sub := widget.NewLabel("Automated SFTP synchronization, SHA-256 integrity verification, and archiving.")
 	sub.Importance = widget.LowImportance
 	sub.Wrapping = fyne.TextWrapWord
-	header := container.NewBorder(nil, nil, logo, nil, container.NewVBox(title, sub))
+	header := container.NewBorder(nil, nil, container.NewPadded(logo), nil, container.NewVBox(titleRow, sub))
 
-	d.srcDot, d.dstDot, d.scanDot = dot(), dot(), dot()
-	d.srcText, d.dstText = widget.NewLabel("Source: —"), widget.NewLabel("Target: —")
-	d.scanText, d.nextText = widget.NewLabel("Scanner: —"), widget.NewLabel("")
-	d.nextText.Importance = widget.LowImportance
-	for _, l := range []*widget.Label{d.srcText, d.dstText, d.scanText} {
-		l.Wrapping = fyne.TextWrapWord
-	}
-	status := widget.NewCard("Status", "", container.NewVBox(
-		container.NewBorder(nil, nil, container.NewCenter(dotCell(d.srcDot)), nil, d.srcText),
-		container.NewBorder(nil, nil, container.NewCenter(dotCell(d.dstDot)), nil, d.dstText),
-		container.NewBorder(nil, nil, container.NewCenter(dotCell(d.scanDot)), nil, d.scanText),
-		d.nextText,
+	d.srcRow = newServerStatusRow("SOURCE SERVER")
+	d.dstRow = newServerStatusRow("TARGET SERVER")
+	d.scanRow = newServerStatusRow("RELAY ENGINE")
+
+	status := widget.NewCard("Connections & Engine", "", container.NewVBox(
+		d.srcRow.box,
+		widget.NewSeparator(),
+		d.dstRow.box,
+		widget.NewSeparator(),
+		d.scanRow.box,
 	))
 
-	d.delivered, d.failed, d.vol = widget.NewLabel("0"), widget.NewLabel("0"), widget.NewLabel("0 B")
+	d.deliveredVal = canvas.NewText("0", ColorAccent)
+	d.deliveredVal.TextSize = 28
+	d.deliveredVal.TextStyle = fyne.TextStyle{Bold: true}
+
+	d.failedVal = canvas.NewText("0", ColorMuted)
+	d.failedVal.TextSize = 28
+	d.failedVal.TextStyle = fyne.TextStyle{Bold: true}
+
+	d.volVal = canvas.NewText("0 B", ColorForeground)
+	d.volVal.TextSize = 22
+	d.volVal.TextStyle = fyne.TextStyle{Bold: true}
+
 	stats := container.NewGridWithColumns(3,
-		statCard("relayed today", d.delivered),
-		statCard("failed today", d.failed),
-		statCard("transferred today", d.vol),
+		statCard("Relayed Today", d.deliveredVal),
+		statCard("Failed Today", d.failedVal),
+		statCard("Data Transferred", d.volVal),
 	)
 
-	d.toggle = widget.NewButtonWithIcon("Start", theme.MediaPlayIcon(), d.onToggle)
+	d.toggle = widget.NewButtonWithIcon("Start Relay", theme.MediaPlayIcon(), d.onToggle)
 	d.toggle.Importance = widget.HighImportance
-	d.scan = widget.NewButtonWithIcon("Scan now", theme.ViewRefreshIcon(), func() {
+	d.scan = widget.NewButtonWithIcon("Scan Now", theme.ViewRefreshIcon(), func() {
 		d.w.ctl.Engine.ScanNow()
 	})
 	controls := container.NewGridWithColumns(2, d.toggle, d.scan)
 
-	d.idle = widget.NewLabel("No transfers in progress")
+	d.idle = widget.NewLabelWithStyle("No transfers in progress · Standing by", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 	d.idle.Importance = widget.LowImportance
-	d.transfers = container.NewVBox(d.idle)
-	active := widget.NewCard("Active transfers", "", d.transfers)
+	d.transfers = container.NewVBox(container.NewPadded(d.idle))
+	active := widget.NewCard("Active Transfers", "", d.transfers)
 
 	d.feedList = widget.NewList(
 		func() int { return len(d.feed) },
@@ -130,6 +167,9 @@ func (d *dashboard) build() {
 			return container.NewBorder(nil, nil, ts, nil, msg)
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
+			if i < 0 || i >= len(d.feed) {
+				return
+			}
 			a := d.feed[len(d.feed)-1-i]
 			c := o.(*fyne.Container)
 			msg := c.Objects[0].(*widget.Label)
@@ -141,12 +181,11 @@ func (d *dashboard) build() {
 			} else {
 				msg.Importance = widget.MediumImportance
 			}
-			msg.Refresh()
 		},
 	)
 	left := container.NewVBox(status, stats, controls)
 	right := container.NewBorder(active, nil, nil, nil,
-		container.NewBorder(widget.NewLabelWithStyle("Recent activity", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, nil, nil, d.feedList))
+		container.NewBorder(widget.NewLabelWithStyle("Live Activity Feed", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, nil, nil, d.feedList))
 	body := container.New(layout.NewGridLayoutWithColumns(2), left, right)
 	d.content = container.NewPadded(container.NewBorder(container.NewVBox(header, widget.NewSeparator()), nil, nil, nil, body))
 	d.render(d.w.ctl.Engine.Status())
@@ -254,64 +293,91 @@ func setDot(c *canvas.Circle, col color.Color) {
 
 func (d *dashboard) render(s relay.Status) {
 	cfg := d.w.ctl.Config()
-	src := fmt.Sprintf("Source  %s  %s", cfg.Source.Addr(), cfg.Source.Directory)
+	d.srcRow.subtitle.SetText(fmt.Sprintf("%s  →  %s", cfg.Source.Addr(), cfg.Source.Directory))
 	if s.SourceConnected {
-		setDot(d.srcDot, ColorSuccess)
-		d.srcText.SetText(src + "  · connected")
+		setDot(d.srcRow.dot, ColorSuccess)
+		d.srcRow.badge.SetText("Connected")
+		d.srcRow.badge.Importance = widget.SuccessImportance
 	} else {
-		setDot(d.srcDot, ColorMuted)
-		d.srcText.SetText(src + "  · idle")
+		setDot(d.srcRow.dot, ColorMuted)
+		d.srcRow.badge.SetText("Idle")
+		d.srcRow.badge.Importance = widget.LowImportance
 	}
+	d.srcRow.badge.Refresh()
+
 	switch {
 	case !s.TargetEnabled:
-		setDot(d.dstDot, ColorWarning)
-		d.dstText.SetText("Target  none — archive-only mode")
+		setDot(d.dstRow.dot, ColorWarning)
+		d.dstRow.subtitle.SetText("Archive-only mode (no remote target)")
+		d.dstRow.badge.SetText("Disabled")
+		d.dstRow.badge.Importance = widget.WarningImportance
 	case s.TargetConnected:
-		setDot(d.dstDot, ColorSuccess)
-		d.dstText.SetText(fmt.Sprintf("Target  %s  %s  · connected", cfg.Target.Addr(), cfg.Target.Directory))
+		setDot(d.dstRow.dot, ColorSuccess)
+		d.dstRow.subtitle.SetText(fmt.Sprintf("%s  →  %s", cfg.Target.Addr(), cfg.Target.Directory))
+		d.dstRow.badge.SetText("Connected")
+		d.dstRow.badge.Importance = widget.SuccessImportance
 	default:
-		setDot(d.dstDot, ColorMuted)
-		d.dstText.SetText(fmt.Sprintf("Target  %s  %s  · idle", cfg.Target.Addr(), cfg.Target.Directory))
+		setDot(d.dstRow.dot, ColorMuted)
+		d.dstRow.subtitle.SetText(fmt.Sprintf("%s  →  %s", cfg.Target.Addr(), cfg.Target.Directory))
+		d.dstRow.badge.SetText("Idle")
+		d.dstRow.badge.Importance = widget.LowImportance
 	}
+	d.dstRow.badge.Refresh()
 
 	switch {
 	case s.Scanning:
-		setDot(d.scanDot, ColorAccent)
-		d.scanText.SetText("Scanner  scanning…")
+		setDot(d.scanRow.dot, ColorAccent)
+		d.scanRow.badge.SetText("Scanning…")
+		d.scanRow.badge.Importance = widget.HighImportance
 	case s.Running && !s.ScheduleActive:
-		setDot(d.scanDot, ColorWarning)
-		d.scanText.SetText(fmt.Sprintf("Scanner  waiting for active hours (%s–%s)", cfg.ActiveSchedule.Start, cfg.ActiveSchedule.End))
+		setDot(d.scanRow.dot, ColorWarning)
+		d.scanRow.badge.SetText("Waiting Schedule")
+		d.scanRow.badge.Importance = widget.WarningImportance
 	case s.Running:
-		setDot(d.scanDot, ColorSuccess)
-		d.scanText.SetText(fmt.Sprintf("Scanner  running every %ds", cfg.PollInterval))
+		setDot(d.scanRow.dot, ColorSuccess)
+		d.scanRow.badge.SetText("Running")
+		d.scanRow.badge.Importance = widget.SuccessImportance
 	default:
-		setDot(d.scanDot, ColorError)
-		d.scanText.SetText("Scanner  paused")
+		setDot(d.scanRow.dot, ColorError)
+		d.scanRow.badge.SetText("Paused")
+		d.scanRow.badge.Importance = widget.DangerImportance
 	}
-	next := ""
+	d.scanRow.badge.Refresh()
+
+	sub := fmt.Sprintf("Poll interval: %ds", cfg.PollInterval)
 	if !s.LastScan.IsZero() {
-		next = "Last scan " + s.LastScan.Format(time.TimeOnly)
+		sub += "  ·  Last: " + s.LastScan.Format(time.TimeOnly)
 	}
 	if s.Running && !s.NextScan.IsZero() {
 		if in := time.Until(s.NextScan).Round(time.Second); in > 0 {
-			next += fmt.Sprintf(" · next in %s", in)
+			sub += fmt.Sprintf("  ·  Next: %s", in)
 		}
 	}
-	d.nextText.SetText(next)
+	d.scanRow.subtitle.SetText(sub)
 
-	d.delivered.SetText(fmt.Sprint(s.Today.Delivered))
-	d.failed.SetText(fmt.Sprint(s.Today.Failed))
-	d.vol.SetText(relay.HumanBytes(s.Today.Bytes))
+	d.deliveredVal.Text = fmt.Sprint(s.Today.Delivered)
+	d.deliveredVal.Refresh()
+
+	d.failedVal.Text = fmt.Sprint(s.Today.Failed)
+	if s.Today.Failed > 0 {
+		d.failedVal.Color = ColorError
+	} else {
+		d.failedVal.Color = ColorMuted
+	}
+	d.failedVal.Refresh()
+
+	d.volVal.Text = relay.HumanBytes(s.Today.Bytes)
+	d.volVal.Refresh()
 
 	if d.lastRunning == nil || *d.lastRunning != s.Running {
 		running := s.Running
 		d.lastRunning = &running
 		if running {
-			d.toggle.SetText("Pause")
+			d.toggle.SetText("Pause Relay")
 			d.toggle.SetIcon(theme.MediaPauseIcon())
 			d.toggle.Importance = widget.MediumImportance
 		} else {
-			d.toggle.SetText("Start")
+			d.toggle.SetText("Start Relay")
 			d.toggle.SetIcon(theme.MediaPlayIcon())
 			d.toggle.Importance = widget.HighImportance
 		}

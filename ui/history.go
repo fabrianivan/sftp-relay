@@ -69,7 +69,6 @@ func newHistoryView(w *Window) *historyView {
 					l.SetText(fmt.Sprintf("→ %s · archived as %s", r.Target, r.Archive))
 				}
 			}
-			l.Refresh()
 		},
 	)
 	h.table.CreateHeader = func() fyne.CanvasObject {

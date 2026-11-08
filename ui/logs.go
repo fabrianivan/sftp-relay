@@ -37,6 +37,9 @@ func newLogView(w *Window) *logView {
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			l := o.(*widget.Label)
+			if i < 0 || i >= len(v.shown) {
+				return
+			}
 			e := v.shown[i]
 			l.SetText(e.Time.Format("15:04:05") + "  " + e.Level.String() + "  " + e.Message)
 			switch e.Level {
@@ -49,7 +52,6 @@ func newLogView(w *Window) *logView {
 			default:
 				l.Importance = widget.MediumImportance
 			}
-			l.Refresh()
 		},
 	)
 

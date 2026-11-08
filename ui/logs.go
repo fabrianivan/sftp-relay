@@ -74,7 +74,9 @@ func newLogView(w *Window) *logView {
 
 	v.all = w.ctl.Log.Recent()
 	v.rebuild()
-	go v.listen()
+	fyne.Do(func() {
+		go v.listen()
+	})
 	return v
 }
 

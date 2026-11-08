@@ -81,8 +81,10 @@ type dashboard struct {
 func newDashboard(w *Window) *dashboard {
 	d := &dashboard{w: w, rows: map[string]*transferRow{}}
 	d.build()
-	go d.listen()
-	go d.poll()
+	fyne.Do(func() {
+		go d.listen()
+		go d.poll()
+	})
 	return d
 }
 
@@ -303,7 +305,6 @@ func (d *dashboard) render(s relay.Status) {
 		d.srcRow.badge.SetText("Idle")
 		d.srcRow.badge.Importance = widget.LowImportance
 	}
-	d.srcRow.badge.Refresh()
 
 	switch {
 	case !s.TargetEnabled:
@@ -322,7 +323,6 @@ func (d *dashboard) render(s relay.Status) {
 		d.dstRow.badge.SetText("Idle")
 		d.dstRow.badge.Importance = widget.LowImportance
 	}
-	d.dstRow.badge.Refresh()
 
 	switch {
 	case s.Scanning:
@@ -342,7 +342,6 @@ func (d *dashboard) render(s relay.Status) {
 		d.scanRow.badge.SetText("Paused")
 		d.scanRow.badge.Importance = widget.DangerImportance
 	}
-	d.scanRow.badge.Refresh()
 
 	sub := fmt.Sprintf("Poll interval: %ds", cfg.PollInterval)
 	if !s.LastScan.IsZero() {

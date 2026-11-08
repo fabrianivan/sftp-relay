@@ -44,66 +44,76 @@ type settingsView struct {
 
 func newSettingsView(w *Window) *settingsView {
 	s := &settingsView{w: w}
-	s.src = s.endpointForm(setup.Source, "Source server", "The folder that is watched for new files.")
-	s.dst = s.endpointForm(setup.Target, "Target server", "Where files are delivered. Leave the host empty to only archive files.")
+	s.src = s.endpointForm(setup.Source, "Source Server (Watched Folder)", "The SFTP server and directory monitored for new incoming files.")
+	s.dst = s.endpointForm(setup.Target, "Target Server (Destination)", "Where files are delivered. Leave host empty to enable archive-only mode.")
 
 	s.backup = widget.NewEntry()
 	s.include = widget.NewEntry()
-	s.include.SetPlaceHolder("* (everything)")
+	s.include.SetPlaceHolder("* (matches all files)")
 	s.exclude = widget.NewEntry()
+	s.exclude.SetPlaceHolder("*.tmp, .DS_Store (comma-separated)")
 	s.stable = widget.NewEntry()
 	s.parallel = widget.NewEntry()
-	s.verify = widget.NewCheck("Verify SHA-256 after upload", nil)
-	rules := widget.NewCard("Transfer rules", "", widget.NewForm(
+	s.verify = widget.NewCheck("Verify file integrity (SHA-256) after transfer", nil)
+
+	rulesCard := widget.NewCard("Relay & Processing Rules", "", widget.NewForm(
 		widget.NewFormItem("Archive folder (source)", s.backup),
 		widget.NewFormItem("Include patterns", s.include),
 		widget.NewFormItem("Exclude patterns", s.exclude),
-		widget.NewFormItem("Wait until unchanged (s)", s.stable),
-		widget.NewFormItem("Parallel transfers", s.parallel),
+		widget.NewFormItem("File stability delay (s)", s.stable),
+		widget.NewFormItem("Max parallel transfers", s.parallel),
 		widget.NewFormItem("", s.verify),
 	))
 
-	s.schedOn = widget.NewCheck("Only scan automatically during these hours", nil)
+	s.schedOn = widget.NewCheck("Enable active schedule hours", nil)
 	s.schedStart, s.schedEnd, s.schedTZ = widget.NewEntry(), widget.NewEntry(), widget.NewEntry()
-	s.schedStart.SetPlaceHolder("06:00")
-	s.schedEnd.SetPlaceHolder("22:00 (earlier than start = overnight)")
-	s.schedTZ.SetPlaceHolder("Local or e.g. Asia/Jakarta")
-	sched := widget.NewCard("Active hours", "", widget.NewForm(
+	s.schedStart.SetPlaceHolder("06:00 (HH:MM)")
+	s.schedEnd.SetPlaceHolder("22:00 (HH:MM, earlier than start = overnight)")
+	s.schedTZ.SetPlaceHolder("Local, UTC, or e.g. Asia/Jakarta")
+	schedCard := widget.NewCard("Operating Hours & Timezone", "", widget.NewForm(
 		widget.NewFormItem("", s.schedOn),
-		widget.NewFormItem("Start (HH:MM)", s.schedStart),
-		widget.NewFormItem("End (HH:MM)", s.schedEnd),
-		widget.NewFormItem("Time zone", s.schedTZ),
+		widget.NewFormItem("Start time", s.schedStart),
+		widget.NewFormItem("End time", s.schedEnd),
+		widget.NewFormItem("Timezone", s.schedTZ),
 	))
 
 	s.poll, s.retries, s.reconnect, s.keepAlive, s.idleScans, s.logDays =
 		widget.NewEntry(), widget.NewEntry(), widget.NewEntry(), widget.NewEntry(), widget.NewEntry(), widget.NewEntry()
-	s.strict = widget.NewCheck("Strict host key checking (never trust new hosts automatically)", nil)
-	s.initial = widget.NewCheck("Scan immediately when started", nil)
-	s.notify = widget.NewCheck("Desktop notifications", nil)
-	s.keychain = widget.NewCheck("Store passwords in the system keychain (recommended)", nil)
-	app := widget.NewCard("Connection & app", "", widget.NewForm(
-		widget.NewFormItem("Scan every (s)", s.poll),
-		widget.NewFormItem("Retries", s.retries),
-		widget.NewFormItem("Retry delay (s)", s.reconnect),
-		widget.NewFormItem("Keep-alive (s)", s.keepAlive),
-		widget.NewFormItem("Close idle sessions after N empty scans", s.idleScans),
-		widget.NewFormItem("Keep logs (days)", s.logDays),
+	s.strict = widget.NewCheck("Strict host key checking (reject unknown hosts)", nil)
+	s.initial = widget.NewCheck("Run immediate scan on application start", nil)
+	s.notify = widget.NewCheck("Enable desktop notifications", nil)
+	s.keychain = widget.NewCheck("Store passwords securely in system keychain (recommended)", nil)
+
+	appCard := widget.NewCard("Connection Engine & App Behavior", "", widget.NewForm(
+		widget.NewFormItem("Scan interval (s)", s.poll),
+		widget.NewFormItem("Max connection retries", s.retries),
+		widget.NewFormItem("Retry backoff (s)", s.reconnect),
+		widget.NewFormItem("SSH keep-alive (s)", s.keepAlive),
+		widget.NewFormItem("Idle disconnect (scans)", s.idleScans),
+		widget.NewFormItem("Log retention (days)", s.logDays),
 		widget.NewFormItem("", s.keychain),
 		widget.NewFormItem("", s.strict),
 		widget.NewFormItem("", s.initial),
 		widget.NewFormItem("", s.notify),
 	))
 
-	save := widget.NewButtonWithIcon("Save & apply", theme.DocumentSaveIcon(), s.save)
+	subTabs := container.NewAppTabs(
+		container.NewTabItemWithIcon("Source Server", theme.FolderIcon(), container.NewVScroll(container.NewPadded(s.src.card))),
+		container.NewTabItemWithIcon("Target Server", theme.UploadIcon(), container.NewVScroll(container.NewPadded(s.dst.card))),
+		container.NewTabItemWithIcon("Transfer Rules", theme.DocumentIcon(), container.NewVScroll(container.NewPadded(rulesCard))),
+		container.NewTabItemWithIcon("Schedule", theme.HistoryIcon(), container.NewVScroll(container.NewPadded(schedCard))),
+		container.NewTabItemWithIcon("Engine & Security", theme.SettingsIcon(), container.NewVScroll(container.NewPadded(appCard))),
+	)
+
+	save := widget.NewButtonWithIcon("Save & Apply Settings", theme.DocumentSaveIcon(), s.save)
 	save.Importance = widget.HighImportance
-	revert := widget.NewButtonWithIcon("Revert", theme.ContentUndoIcon(), s.load)
-	path := widget.NewLabel("Config file: " + w.ctl.Path)
+	revert := widget.NewButtonWithIcon("Revert Changes", theme.ContentUndoIcon(), s.load)
+	path := widget.NewLabel("Config: " + w.ctl.Path)
 	path.Importance = widget.LowImportance
 	path.Truncation = fyne.TextTruncateEllipsis
 
-	grid := container.NewVBox(s.src.card, s.dst.card, rules, sched, app)
 	footer := container.NewBorder(nil, nil, nil, container.NewHBox(revert, save), path)
-	s.content = container.NewBorder(nil, container.NewPadded(footer), nil, nil, container.NewVScroll(container.NewPadded(grid)))
+	s.content = container.NewBorder(nil, container.NewPadded(footer), nil, nil, subTabs)
 	s.load()
 	return s
 }
@@ -113,13 +123,14 @@ func (s *settingsView) endpointForm(role, title, subtitle string) *endpointForm 
 	f.host, f.port, f.user = widget.NewEntry(), widget.NewEntry(), widget.NewEntry()
 	f.pass = widget.NewPasswordEntry()
 	f.key, f.dir, f.fingerprint = widget.NewEntry(), widget.NewEntry(), widget.NewEntry()
-	f.key.SetPlaceHolder("optional, e.g. ~/.ssh/id_ed25519")
-	f.fingerprint.SetPlaceHolder("optional pin, e.g. SHA256:…")
+	f.key.SetPlaceHolder("Optional, e.g. ~/.ssh/id_ed25519")
+	f.fingerprint.SetPlaceHolder("Optional pin, e.g. SHA256:…")
+	f.dir.SetPlaceHolder("/remote/path/to/folder")
 	f.passHint = widget.NewLabel("")
 	f.passHint.Importance = widget.LowImportance
 	f.passHint.Wrapping = fyne.TextWrapWord
 
-	browse := widget.NewButtonWithIcon("", theme.FolderOpenIcon(), func() {
+	browse := widget.NewButtonWithIcon("Browse…", theme.FolderOpenIcon(), func() {
 		d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
 			if err == nil && r != nil {
 				f.key.SetText(r.URI().Path())
@@ -128,16 +139,17 @@ func (s *settingsView) endpointForm(role, title, subtitle string) *endpointForm 
 		}, s.w.win)
 		d.Show()
 	})
-	test := widget.NewButtonWithIcon("Test connection", theme.ConfirmIcon(), func() { s.test(f) })
+	test := widget.NewButtonWithIcon("Test Connection", theme.ConfirmIcon(), func() { s.test(f) })
+	test.Importance = widget.MediumImportance
 
 	form := widget.NewForm(
-		widget.NewFormItem("Host", f.host),
+		widget.NewFormItem("Host address", f.host),
 		widget.NewFormItem("Port", f.port),
 		widget.NewFormItem("Username", f.user),
 		widget.NewFormItem("Password", f.pass),
 		widget.NewFormItem("", f.passHint),
 		widget.NewFormItem("Private key", container.NewBorder(nil, nil, nil, browse, f.key)),
-		widget.NewFormItem("Folder", f.dir),
+		widget.NewFormItem("Remote folder", f.dir),
 		widget.NewFormItem("Host key pin", f.fingerprint),
 	)
 	f.card = widget.NewCard(title, subtitle, container.NewVBox(form, container.NewHBox(test)))

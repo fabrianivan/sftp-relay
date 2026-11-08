@@ -68,6 +68,7 @@ type dashboard struct {
 	volVal       *canvas.Text
 
 	toggle, scan *widget.Button
+	activeCard   *widget.Card
 	transfers    *fyne.Container
 	idle         *widget.Label
 	rows         map[string]*transferRow
@@ -156,7 +157,7 @@ func (d *dashboard) build() {
 	d.idle = widget.NewLabelWithStyle("No transfers in progress · Standing by", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 	d.idle.Importance = widget.LowImportance
 	d.transfers = container.NewVBox(container.NewPadded(d.idle))
-	active := widget.NewCard("Active Transfers", "", d.transfers)
+	d.activeCard = widget.NewCard("Active Transfers", "", d.transfers)
 
 	d.feedList = widget.NewList(
 		func() int { return len(d.feed) },
@@ -186,7 +187,7 @@ func (d *dashboard) build() {
 		},
 	)
 	left := container.NewVBox(status, stats, controls)
-	right := container.NewBorder(active, nil, nil, nil,
+	right := container.NewBorder(d.activeCard, nil, nil, nil,
 		container.NewBorder(widget.NewLabelWithStyle("Live Activity Feed", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, nil, nil, d.feedList))
 	body := container.New(layout.NewGridLayoutWithColumns(2), left, right)
 	d.content = container.NewPadded(container.NewBorder(container.NewVBox(header, widget.NewSeparator()), nil, nil, nil, body))
@@ -264,6 +265,7 @@ func (d *dashboard) row(file string) *transferRow {
 	d.rows[file] = r
 	d.transfers.Remove(d.idle)
 	d.transfers.Add(r.box)
+	d.activeCard.SetTitle(fmt.Sprintf("Active Transfers (%d)", len(d.rows)))
 	return r
 }
 
@@ -274,6 +276,9 @@ func (d *dashboard) dropRow(file string) {
 	}
 	if len(d.rows) == 0 && len(d.transfers.Objects) == 0 {
 		d.transfers.Add(d.idle)
+		d.activeCard.SetTitle("Active Transfers")
+	} else if len(d.rows) > 0 {
+		d.activeCard.SetTitle(fmt.Sprintf("Active Transfers (%d)", len(d.rows)))
 	}
 }
 

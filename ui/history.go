@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -17,7 +18,7 @@ var historyCols = []struct {
 	title string
 	width float32
 }{
-	{"Time", 150}, {"File", 260}, {"Size", 90}, {"Duration", 90}, {"Status", 90}, {"Details", 420},
+	{"Time", 150}, {"File", 260}, {"Size", 90}, {"Duration", 90}, {"Status", 100}, {"Details", 420},
 }
 
 type historyView struct {
@@ -27,6 +28,7 @@ type historyView struct {
 	records []history.Record
 	summary *widget.Label
 	filter  *widget.Select
+	search  *widget.Entry
 }
 
 func newHistoryView(w *Window) *historyView {
@@ -56,10 +58,11 @@ func newHistoryView(w *Window) *historyView {
 			case 3:
 				l.SetText(r.Duration().Round(time.Millisecond).String())
 			case 4:
-				l.SetText(string(r.Status))
 				if r.Status == history.Failed {
+					l.SetText("✗ Failed")
 					l.Importance = widget.DangerImportance
 				} else {
+					l.SetText("✓ Delivered")
 					l.Importance = widget.SuccessImportance
 				}
 			case 5:
@@ -87,15 +90,21 @@ func newHistoryView(w *Window) *historyView {
 		h.table.SetColumnWidth(i, c.width)
 	}
 
-	h.summary = widget.NewLabel("")
+	h.summary = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	h.filter = widget.NewSelect([]string{"All", "Delivered", "Failed"}, func(string) { h.refresh() })
 	h.filter.SetSelected("All")
+	h.search = widget.NewEntry()
+	h.search.SetPlaceHolder("Search file name or target…")
+	h.search.OnChanged = func(string) { h.refresh() }
+
 	refresh := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), h.refresh)
-	open := widget.NewButtonWithIcon("Open history file", theme.FolderOpenIcon(), func() {
+	open := widget.NewButtonWithIcon("Open file", theme.FolderOpenIcon(), func() {
 		openPath(w.ctl.Engine.History().Path())
 	})
-	bar := container.NewBorder(nil, nil, container.NewHBox(widget.NewLabel("Show"), h.filter), container.NewHBox(refresh, open), h.summary)
-	h.content = container.NewPadded(container.NewBorder(bar, nil, nil, nil, h.table))
+	leftBar := container.NewHBox(widget.NewLabel("Filter:"), h.filter, widget.NewLabel("Search:"), container.NewGridWrap(fyne.NewSize(200, 36), h.search))
+	rightBar := container.NewHBox(refresh, open)
+	topBar := container.NewBorder(nil, nil, leftBar, rightBar, container.NewCenter(h.summary))
+	h.content = container.NewPadded(container.NewBorder(topBar, nil, nil, nil, h.table))
 	h.refresh()
 	return h
 }
@@ -104,6 +113,10 @@ func (h *historyView) refresh() {
 	all := h.w.ctl.Engine.History().Records()
 	var ok, failed int
 	h.records = h.records[:0]
+	q := ""
+	if h.search != nil {
+		q = strings.ToLower(strings.TrimSpace(h.search.Text))
+	}
 	for _, r := range all {
 		if r.Status == history.Failed {
 			failed++
@@ -120,9 +133,12 @@ func (h *historyView) refresh() {
 				continue
 			}
 		}
+		if q != "" && !strings.Contains(strings.ToLower(r.File), q) && !strings.Contains(strings.ToLower(r.Target), q) {
+			continue
+		}
 		h.records = append(h.records, r)
 	}
-	h.summary.SetText(fmt.Sprintf("%d processed · %d failed (last %d entries kept)", ok, failed, len(all)))
+	h.summary.SetText(fmt.Sprintf("%d Delivered  ·  %d Failed  (Showing %d of %d)", ok, failed, len(h.records), len(all)))
 	h.table.Refresh()
 }
 

@@ -83,6 +83,14 @@ func (Theme) Size(name fyne.ThemeSizeName) float32 {
 		return 22
 	case theme.SizeNameSubHeadingText:
 		return 16
+	case theme.SizeNameCaptionText:
+		return 12
+	case theme.SizeNameInlineIcon:
+		return 20
+	case theme.SizeNameScrollBar:
+		return 10
+	case theme.SizeNameSelectionRadius:
+		return 6
 	case theme.SizeNameInputBorder:
 		return 1.5
 	default:

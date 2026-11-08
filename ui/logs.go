@@ -1,12 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -23,6 +24,7 @@ type logView struct {
 	shown      []logging.Entry
 	min        logging.Level
 	autoScroll bool
+	search     *widget.Entry
 }
 
 func newLogView(w *Window) *logView {
@@ -41,7 +43,8 @@ func newLogView(w *Window) *logView {
 				return
 			}
 			e := v.shown[i]
-			l.SetText(e.Time.Format("15:04:05") + "  " + e.Level.String() + "  " + e.Message)
+			lvl := fmt.Sprintf("[%-5s]", e.Level.String())
+			l.SetText(fmt.Sprintf("%s  %-7s  %s", e.Time.Format("15:04:05"), lvl, e.Message))
 			switch e.Level {
 			case logging.Error:
 				l.Importance = widget.DangerImportance
@@ -62,6 +65,11 @@ func newLogView(w *Window) *logView {
 	level.SetSelected("Info")
 	auto := widget.NewCheck("Auto-scroll", func(b bool) { v.autoScroll = b })
 	auto.SetChecked(true)
+
+	v.search = widget.NewEntry()
+	v.search.SetPlaceHolder("Search in logs…")
+	v.search.OnChanged = func(string) { v.rebuild() }
+
 	clearBtn := widget.NewButtonWithIcon("Clear", theme.ContentClearIcon(), func() {
 		v.all = nil
 		v.rebuild()
@@ -69,7 +77,9 @@ func newLogView(w *Window) *logView {
 	open := widget.NewButtonWithIcon("Open log folder", theme.FolderOpenIcon(), func() {
 		openPath(w.ctl.Log.Dir())
 	})
-	bar := container.NewHBox(widget.NewLabel("Level"), level, auto, layout.NewSpacer(), clearBtn, open)
+	left := container.NewHBox(widget.NewLabel("Level:"), level, auto, widget.NewLabel("Search:"), container.NewGridWrap(fyne.NewSize(200, 36), v.search))
+	right := container.NewHBox(clearBtn, open)
+	bar := container.NewBorder(nil, nil, left, right)
 	v.content = container.NewPadded(container.NewBorder(bar, nil, nil, nil, v.list))
 
 	v.all = w.ctl.Log.Recent()
@@ -107,9 +117,16 @@ func (v *logView) rebuild() {
 	if v.list == nil {
 		return
 	}
+	q := ""
+	if v.search != nil {
+		q = strings.ToLower(strings.TrimSpace(v.search.Text))
+	}
 	v.shown = v.shown[:0]
 	for _, e := range v.all {
 		if e.Level >= v.min {
+			if q != "" && !strings.Contains(strings.ToLower(e.Message), q) {
+				continue
+			}
 			v.shown = append(v.shown, e)
 		}
 	}

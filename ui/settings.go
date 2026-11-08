@@ -44,8 +44,8 @@ type settingsView struct {
 
 func newSettingsView(w *Window) *settingsView {
 	s := &settingsView{w: w}
-	s.src = s.endpointForm(setup.Source, "Source Server (Watched Folder)", "The SFTP server and directory monitored for new incoming files.")
-	s.dst = s.endpointForm(setup.Target, "Target Server (Destination)", "Where files are delivered. Leave host empty to enable archive-only mode.")
+	s.src = s.endpointForm(setup.Source, "📥 Source Server (Watched Folder)", "The SFTP server and directory monitored for new incoming files.")
+	s.dst = s.endpointForm(setup.Target, "📤 Target Server (Destination)", "Where files are delivered. Leave host empty to enable archive-only mode.")
 
 	s.backup = widget.NewEntry()
 	s.include = widget.NewEntry()
@@ -56,7 +56,7 @@ func newSettingsView(w *Window) *settingsView {
 	s.parallel = widget.NewEntry()
 	s.verify = widget.NewCheck("Verify file integrity (SHA-256) after transfer", nil)
 
-	rulesCard := widget.NewCard("Relay & Processing Rules", "", widget.NewForm(
+	rulesCard := widget.NewCard("⚙️  Relay & Processing Rules", "", widget.NewForm(
 		widget.NewFormItem("Archive folder (source)", s.backup),
 		widget.NewFormItem("Include patterns", s.include),
 		widget.NewFormItem("Exclude patterns", s.exclude),
@@ -70,7 +70,7 @@ func newSettingsView(w *Window) *settingsView {
 	s.schedStart.SetPlaceHolder("06:00 (HH:MM)")
 	s.schedEnd.SetPlaceHolder("22:00 (HH:MM, earlier than start = overnight)")
 	s.schedTZ.SetPlaceHolder("Local, UTC, or e.g. Asia/Jakarta")
-	schedCard := widget.NewCard("Operating Hours & Timezone", "", widget.NewForm(
+	schedCard := widget.NewCard("🕐  Operating Hours & Timezone", "", widget.NewForm(
 		widget.NewFormItem("", s.schedOn),
 		widget.NewFormItem("Start time", s.schedStart),
 		widget.NewFormItem("End time", s.schedEnd),
@@ -84,7 +84,7 @@ func newSettingsView(w *Window) *settingsView {
 	s.notify = widget.NewCheck("Enable desktop notifications", nil)
 	s.keychain = widget.NewCheck("Store passwords securely in system keychain (recommended)", nil)
 
-	appCard := widget.NewCard("Connection Engine & App Behavior", "", widget.NewForm(
+	appCard := widget.NewCard("🔧  Connection Engine & App Behavior", "", widget.NewForm(
 		widget.NewFormItem("Scan interval (s)", s.poll),
 		widget.NewFormItem("Max connection retries", s.retries),
 		widget.NewFormItem("Retry backoff (s)", s.reconnect),
@@ -98,17 +98,19 @@ func newSettingsView(w *Window) *settingsView {
 	))
 
 	subTabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("Source Server", theme.FolderIcon(), container.NewVScroll(container.NewPadded(s.src.card))),
-		container.NewTabItemWithIcon("Target Server", theme.UploadIcon(), container.NewVScroll(container.NewPadded(s.dst.card))),
-		container.NewTabItemWithIcon("Transfer Rules", theme.DocumentIcon(), container.NewVScroll(container.NewPadded(rulesCard))),
+		container.NewTabItemWithIcon("Source", theme.FolderIcon(), container.NewVScroll(container.NewPadded(s.src.card))),
+		container.NewTabItemWithIcon("Target", theme.UploadIcon(), container.NewVScroll(container.NewPadded(s.dst.card))),
+		container.NewTabItemWithIcon("Rules", theme.DocumentIcon(), container.NewVScroll(container.NewPadded(rulesCard))),
 		container.NewTabItemWithIcon("Schedule", theme.HistoryIcon(), container.NewVScroll(container.NewPadded(schedCard))),
-		container.NewTabItemWithIcon("Engine & Security", theme.SettingsIcon(), container.NewVScroll(container.NewPadded(appCard))),
+		container.NewTabItemWithIcon("Engine", theme.SettingsIcon(), container.NewVScroll(container.NewPadded(appCard))),
 	)
 
-	save := widget.NewButtonWithIcon("Save & Apply Settings", theme.DocumentSaveIcon(), s.save)
+	save := widget.NewButtonWithIcon("💾  Save & Apply Settings", theme.DocumentSaveIcon(), s.save)
 	save.Importance = widget.HighImportance
-	revert := widget.NewButtonWithIcon("Revert Changes", theme.ContentUndoIcon(), s.load)
-	path := widget.NewLabel("Config: " + w.ctl.Path)
+	revert := widget.NewButtonWithIcon("↶  Revert Changes", theme.ContentUndoIcon(), s.load)
+	revert.Importance = widget.MediumImportance
+
+	path := widget.NewLabel("📁  Config: " + w.ctl.Path)
 	path.Importance = widget.LowImportance
 	path.Truncation = fyne.TextTruncateEllipsis
 
@@ -139,8 +141,10 @@ func (s *settingsView) endpointForm(role, title, subtitle string) *endpointForm 
 		}, s.w.win)
 		d.Show()
 	})
-	test := widget.NewButtonWithIcon("Test Connection", theme.ConfirmIcon(), func() { s.test(f) })
-	test.Importance = widget.MediumImportance
+	browse.Importance = widget.MediumImportance
+
+	test := widget.NewButtonWithIcon("🔌  Test Connection", theme.ConfirmIcon(), func() { s.test(f) })
+	test.Importance = widget.HighImportance
 
 	form := widget.NewForm(
 		widget.NewFormItem("Host address", f.host),

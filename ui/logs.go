@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -58,29 +59,53 @@ func newLogView(w *Window) *logView {
 		},
 	)
 
+	// Enhanced header with modern design
+	title := canvas.NewText("🔍  System Logs", ColorForeground)
+	title.TextSize = 20
+	title.TextStyle = fyne.TextStyle{Bold: true}
+
 	level := widget.NewSelect([]string{"Errors", "Warnings", "Info", "Debug"}, func(s string) {
 		v.min = map[string]logging.Level{"Errors": logging.Error, "Warnings": logging.Warn, "Info": logging.Info, "Debug": logging.Debug}[s]
 		v.rebuild()
 	})
 	level.SetSelected("Info")
+
 	auto := widget.NewCheck("Auto-scroll", func(b bool) { v.autoScroll = b })
 	auto.SetChecked(true)
 
 	v.search = widget.NewEntry()
-	v.search.SetPlaceHolder("Search in logs…")
+	v.search.SetPlaceHolder("🔍 Search in logs…")
 	v.search.OnChanged = func(string) { v.rebuild() }
 
-	clearBtn := widget.NewButtonWithIcon("Clear", theme.ContentClearIcon(), func() {
+	clearBtn := widget.NewButtonWithIcon("Clear Logs", theme.ContentClearIcon(), func() {
 		v.all = nil
 		v.rebuild()
 	})
-	open := widget.NewButtonWithIcon("Open log folder", theme.FolderOpenIcon(), func() {
+	clearBtn.Importance = widget.MediumImportance
+
+	open := widget.NewButtonWithIcon("Open Folder", theme.FolderOpenIcon(), func() {
 		openPath(w.ctl.Log.Dir())
 	})
-	left := container.NewHBox(widget.NewLabel("Level:"), level, auto, widget.NewLabel("Search:"), container.NewGridWrap(fyne.NewSize(200, 36), v.search))
-	right := container.NewHBox(clearBtn, open)
-	bar := container.NewBorder(nil, nil, left, right)
-	v.content = container.NewPadded(container.NewBorder(bar, nil, nil, nil, v.list))
+	open.Importance = widget.MediumImportance
+
+	leftBar := container.NewHBox(
+		widget.NewLabel("Level:"),
+		level,
+		widget.NewSeparator(),
+		auto,
+		widget.NewSeparator(),
+		widget.NewLabel("Search:"),
+		container.NewGridWrap(fyne.NewSize(250, 38), v.search),
+	)
+	rightBar := container.NewHBox(clearBtn, open)
+
+	headerRow := container.NewVBox(
+		title,
+		container.NewPadded(widget.NewSeparator()),
+		container.NewBorder(nil, nil, leftBar, rightBar),
+	)
+
+	v.content = container.NewPadded(container.NewBorder(headerRow, nil, nil, nil, v.list))
 
 	v.all = w.ctl.Log.Recent()
 	v.rebuild()

@@ -7,50 +7,78 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
-// Theme is SFTP Relay's dark theme with an emerald accent.
+// Theme is SFTP Relay's modern dark theme with vibrant gradients.
 type Theme struct{}
 
 var _ fyne.Theme = (*Theme)(nil)
 
-// Palette shared by custom widgets.
+// Enhanced palette with modern color scheme
 var (
-	ColorAccent  = color.NRGBA{R: 16, G: 185, B: 129, A: 255} // emerald-500
-	ColorSuccess = color.NRGBA{R: 34, G: 197, B: 94, A: 255}  // green-500
-	ColorWarning = color.NRGBA{R: 245, G: 158, B: 11, A: 255} // amber-500
-	ColorError   = color.NRGBA{R: 239, G: 68, B: 68, A: 255}  // red-500
-	ColorMuted      = color.NRGBA{R: 148, G: 163, B: 184, A: 255} // slate-400
-	ColorCard       = color.NRGBA{R: 21, G: 29, B: 42, A: 255}   // slate-800+
-	ColorForeground = color.NRGBA{R: 248, G: 250, B: 252, A: 255} // slate-50
+	// Primary gradient colors
+	ColorAccent     = color.NRGBA{R: 99, G: 102, B: 241, A: 255}  // Indigo-500 (vibrant primary)
+	ColorAccentDark = color.NRGBA{R: 79, G: 70, B: 229, A: 255}   // Indigo-600
+	ColorAccentGlow = color.NRGBA{R: 99, G: 102, B: 241, A: 60}   // Glow effect
+	
+	// Status colors with better contrast
+	ColorSuccess     = color.NRGBA{R: 16, G: 185, B: 129, A: 255}  // Emerald-500
+	ColorSuccessGlow = color.NRGBA{R: 16, G: 185, B: 129, A: 40}
+	ColorWarning     = color.NRGBA{R: 251, G: 146, B: 60, A: 255}  // Orange-500
+	ColorWarningGlow = color.NRGBA{R: 251, G: 146, B: 60, A: 40}
+	ColorError       = color.NRGBA{R: 244, G: 63, B: 94, A: 255}   // Rose-500
+	ColorErrorGlow   = color.NRGBA{R: 244, G: 63, B: 94, A: 40}
+	
+	// Background layers (glass-morphism inspired)
+	ColorBackground     = color.NRGBA{R: 10, G: 10, B: 20, A: 255}        // Deep navy
+	ColorBackgroundAlt  = color.NRGBA{R: 15, G: 15, B: 30, A: 255}        // Slightly lighter
+	ColorCard           = color.NRGBA{R: 20, G: 20, B: 40, A: 245}        // Card background
+	ColorCardHover      = color.NRGBA{R: 25, G: 25, B: 50, A: 255}        // Card hover
+	ColorCardBorder     = color.NRGBA{R: 60, G: 60, B: 100, A: 80}        // Subtle border
+	
+	// Text hierarchy
+	ColorForeground    = color.NRGBA{R: 248, G: 250, B: 252, A: 255}  // Almost white
+	ColorForegroundSub = color.NRGBA{R: 203, G: 213, B: 225, A: 255}  // Slate-300
+	ColorMuted         = color.NRGBA{R: 148, G: 163, B: 184, A: 255}  // Slate-400
+	ColorMutedDark     = color.NRGBA{R: 100, G: 116, B: 139, A: 255}  // Slate-500
+	
+	// Interactive elements
+	ColorButtonPrimary   = color.NRGBA{R: 99, G: 102, B: 241, A: 255}
+	ColorButtonHover     = color.NRGBA{R: 79, G: 70, B: 229, A: 255}
+	ColorButtonSecondary = color.NRGBA{R: 30, G: 30, B: 50, A: 255}
+	
+	// Special effects
+	ColorShadow      = color.NRGBA{R: 0, G: 0, B: 0, A: 140}
+	ColorShadowLight = color.NRGBA{R: 0, G: 0, B: 0, A: 60}
+	ColorHighlight   = color.NRGBA{R: 255, G: 255, B: 255, A: 10}
 )
 
 func (Theme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 	switch name {
 	case theme.ColorNameBackground:
-		return color.NRGBA{R: 11, G: 15, B: 23, A: 255} // modern deep slate #0B0F17
+		return ColorBackground
 	case theme.ColorNameButton:
-		return color.NRGBA{R: 30, G: 41, B: 59, A: 255} // slate-800
+		return ColorButtonSecondary
 	case theme.ColorNameDisabledButton:
-		return color.NRGBA{R: 20, G: 27, B: 38, A: 255}
+		return color.NRGBA{R: 20, G: 20, B: 35, A: 255}
 	case theme.ColorNameDisabled:
-		return color.NRGBA{R: 100, G: 116, B: 139, A: 255} // slate-500
+		return ColorMutedDark
 	case theme.ColorNameForeground:
-		return color.NRGBA{R: 248, G: 250, B: 252, A: 255} // slate-50
+		return ColorForeground
 	case theme.ColorNameHover:
-		return color.NRGBA{R: 51, G: 65, B: 85, A: 255} // slate-700
+		return ColorCardHover
 	case theme.ColorNameInputBackground:
-		return color.NRGBA{R: 17, G: 24, B: 39, A: 255} // slate-900
+		return color.NRGBA{R: 15, G: 15, B: 30, A: 255}
 	case theme.ColorNameInputBorder:
-		return color.NRGBA{R: 51, G: 65, B: 85, A: 255} // slate-700
+		return ColorCardBorder
 	case theme.ColorNamePlaceHolder:
-		return color.NRGBA{R: 148, G: 163, B: 184, A: 255}
+		return ColorMuted
 	case theme.ColorNamePrimary:
 		return ColorAccent
 	case theme.ColorNameScrollBar:
-		return color.NRGBA{R: 71, G: 85, B: 105, A: 180}
+		return color.NRGBA{R: 60, G: 60, B: 100, A: 180}
 	case theme.ColorNameSeparator:
-		return color.NRGBA{R: 30, G: 41, B: 59, A: 255}
+		return color.NRGBA{R: 40, G: 40, B: 70, A: 255}
 	case theme.ColorNameShadow:
-		return color.NRGBA{A: 110}
+		return ColorShadow
 	case theme.ColorNameSuccess:
 		return ColorSuccess
 	case theme.ColorNameWarning:
@@ -58,13 +86,13 @@ func (Theme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 	case theme.ColorNameError:
 		return ColorError
 	case theme.ColorNameHeaderBackground:
-		return color.NRGBA{R: 17, G: 24, B: 39, A: 255}
+		return ColorBackgroundAlt
 	case theme.ColorNameMenuBackground, theme.ColorNameOverlayBackground:
-		return color.NRGBA{R: 21, G: 29, B: 42, A: 252}
+		return color.NRGBA{R: 20, G: 20, B: 40, A: 250}
 	case theme.ColorNameSelection:
-		return color.NRGBA{R: 16, G: 185, B: 129, A: 70}
+		return color.NRGBA{R: 99, G: 102, B: 241, A: 60}
 	case theme.ColorNameFocus:
-		return color.NRGBA{R: 16, G: 185, B: 129, A: 190}
+		return color.NRGBA{R: 99, G: 102, B: 241, A: 200}
 	default:
 		return theme.DefaultTheme().Color(name, theme.VariantDark)
 	}
@@ -76,23 +104,23 @@ func (Theme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultThem
 func (Theme) Size(name fyne.ThemeSizeName) float32 {
 	switch name {
 	case theme.SizeNamePadding:
-		return 8
+		return 10
 	case theme.SizeNameText:
 		return 14
 	case theme.SizeNameHeadingText:
-		return 22
+		return 24
 	case theme.SizeNameSubHeadingText:
-		return 16
+		return 18
 	case theme.SizeNameCaptionText:
 		return 12
 	case theme.SizeNameInlineIcon:
-		return 20
+		return 22
 	case theme.SizeNameScrollBar:
-		return 10
+		return 12
 	case theme.SizeNameSelectionRadius:
-		return 6
+		return 8
 	case theme.SizeNameInputBorder:
-		return 1.5
+		return 2
 	default:
 		return theme.DefaultTheme().Size(name)
 	}

@@ -39,9 +39,9 @@ func Icon() fyne.Resource { return fyne.NewStaticResource("sftp-relay.png", asse
 // Settings tab with the validation error shown.
 func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem error) *Window {
 	w := &Window{app: a, ctl: ctl, version: version}
-	w.win = a.NewWindow(AppName + " " + version)
+	w.win = a.NewWindow(AppName + " v" + version)
 	w.win.SetIcon(Icon())
-	w.win.Resize(fyne.NewSize(980, 680))
+	w.win.Resize(fyne.NewSize(1280, 820)) // Larger modern window
 	w.win.SetMaster()
 
 	w.dashboard = newDashboard(w)
@@ -49,6 +49,7 @@ func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem 
 	w.settings = newSettingsView(w)
 	w.logs = newLogView(w)
 
+	// Modern tabs with better icons
 	w.tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), w.dashboard.content),
 		container.NewTabItemWithIcon("History", theme.HistoryIcon(), w.history.content),

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -18,7 +19,7 @@ var historyCols = []struct {
 	title string
 	width float32
 }{
-	{"Time", 150}, {"File", 260}, {"Size", 90}, {"Duration", 90}, {"Status", 100}, {"Details", 420},
+	{"⏰ Time", 160}, {"📄 File", 300}, {"📦 Size", 100}, {"⚡ Duration", 100}, {"✓ Status", 120}, {"📋 Details", 450},
 }
 
 type historyView struct {
@@ -62,7 +63,7 @@ func newHistoryView(w *Window) *historyView {
 					l.SetText("✗ Failed")
 					l.Importance = widget.DangerImportance
 				} else {
-					l.SetText("✓ Delivered")
+					l.SetText("✓ Success")
 					l.Importance = widget.SuccessImportance
 				}
 			case 5:
@@ -90,21 +91,44 @@ func newHistoryView(w *Window) *historyView {
 		h.table.SetColumnWidth(i, c.width)
 	}
 
+	// Enhanced header
+	title := canvas.NewText("📜  Transfer History", ColorForeground)
+	title.TextSize = 20
+	title.TextStyle = fyne.TextStyle{Bold: true}
+
 	h.summary = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	h.summary.Importance = widget.MediumImportance
+
 	h.filter = widget.NewSelect([]string{"All", "Delivered", "Failed"}, func(string) { h.refresh() })
 	h.filter.SetSelected("All")
 	h.search = widget.NewEntry()
-	h.search.SetPlaceHolder("Search file name or target…")
+	h.search.SetPlaceHolder("🔍 Search file name or target…")
 	h.search.OnChanged = func(string) { h.refresh() }
 
 	refresh := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), h.refresh)
-	open := widget.NewButtonWithIcon("Open file", theme.FolderOpenIcon(), func() {
+	refresh.Importance = widget.MediumImportance
+
+	open := widget.NewButtonWithIcon("Open Folder", theme.FolderOpenIcon(), func() {
 		openPath(w.ctl.Engine.History().Path())
 	})
-	leftBar := container.NewHBox(widget.NewLabel("Filter:"), h.filter, widget.NewLabel("Search:"), container.NewGridWrap(fyne.NewSize(200, 36), h.search))
+	open.Importance = widget.MediumImportance
+
+	leftBar := container.NewHBox(
+		widget.NewLabel("Filter:"),
+		h.filter,
+		widget.NewSeparator(),
+		widget.NewLabel("Search:"),
+		container.NewGridWrap(fyne.NewSize(250, 38), h.search),
+	)
 	rightBar := container.NewHBox(refresh, open)
-	topBar := container.NewBorder(nil, nil, leftBar, rightBar, container.NewCenter(h.summary))
-	h.content = container.NewPadded(container.NewBorder(topBar, nil, nil, nil, h.table))
+
+	headerRow := container.NewVBox(
+		title,
+		container.NewPadded(widget.NewSeparator()),
+		container.NewBorder(nil, nil, leftBar, rightBar, container.NewCenter(h.summary)),
+	)
+
+	h.content = container.NewPadded(container.NewBorder(headerRow, nil, nil, nil, h.table))
 	h.refresh()
 	return h
 }
@@ -138,7 +162,7 @@ func (h *historyView) refresh() {
 		}
 		h.records = append(h.records, r)
 	}
-	h.summary.SetText(fmt.Sprintf("%d Delivered  ·  %d Failed  (Showing %d of %d)", ok, failed, len(h.records), len(all)))
+	h.summary.SetText(fmt.Sprintf("✓ %d Delivered  ·  ✗ %d Failed  ·  Showing %d of %d records", ok, failed, len(h.records), len(all)))
 	h.table.Refresh()
 }
 

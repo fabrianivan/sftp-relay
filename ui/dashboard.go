@@ -44,16 +44,27 @@ func newServerStatusRow(title string) *serverStatusRow {
 		subtitle: widget.NewLabel("—"),
 		badge:    widget.NewLabelWithStyle("Idle", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 	}
-	r.subtitle.Importance = widget.LowImportance
+	r.subtitle.Importance = widget.MediumImportance
 	r.subtitle.Truncation = fyne.TextTruncateEllipsis
-	r.badge.Importance = widget.LowImportance
+	r.badge.Importance = widget.MediumImportance
 
-	dotObj := container.NewGridWrap(fyne.NewSize(10, 10), r.dot)
+	// Enhanced dot with better visual
+	dotObj := container.NewGridWrap(fyne.NewSize(12, 12), r.dot)
+
+	// Improved header layout
 	header := container.NewBorder(nil, nil,
-		container.NewHBox(container.NewCenter(dotObj), r.title),
+		container.NewHBox(
+			container.NewCenter(dotObj),
+			r.title,
+		),
 		r.badge,
 	)
-	r.box = container.NewVBox(header, container.NewPadded(r.subtitle))
+
+	// Better spacing for subtitle
+	r.box = container.NewVBox(
+		header,
+		container.NewPadded(r.subtitle),
+	)
 	return r
 }
 
@@ -90,81 +101,145 @@ func newDashboard(w *Window) *dashboard {
 }
 
 func statCard(title string, val *canvas.Text) fyne.CanvasObject {
-	t := widget.NewLabel(title)
-	t.Alignment = fyne.TextAlignCenter
-	t.Importance = widget.LowImportance
-	return widget.NewCard("", "", container.NewVBox(
-		container.NewCenter(val),
-		t,
-	))
+	// Create enhanced stat card with better visual hierarchy
+	t := widget.NewLabelWithStyle(title, fyne.TextAlignCenter, fyne.TextStyle{})
+	t.Importance = widget.MediumImportance
+
+	// Add visual container for value
+	valueContainer := container.NewCenter(
+		container.NewVBox(
+			container.NewCenter(val),
+			container.NewPadded(t),
+		),
+	)
+
+	card := widget.NewCard("", "", valueContainer)
+	return card
 }
 
 func (d *dashboard) build() {
+	// Modern logo with glow effect
 	logo := canvas.NewImageFromResource(Icon())
 	logo.FillMode = canvas.ImageFillContain
-	logo.SetMinSize(fyne.NewSize(52, 52))
+	logo.SetMinSize(fyne.NewSize(64, 64))
+
+	// Title with gradient effect (simulated with color)
 	title := canvas.NewText(AppName, ColorAccent)
-	title.TextSize = 24
+	title.TextSize = 32
 	title.TextStyle = fyne.TextStyle{Bold: true}
 
-	vBadge := canvas.NewText(" "+d.w.version+" ", ColorSuccess)
-	vBadge.TextSize = 13
-	vBadge.TextStyle = fyne.TextStyle{Bold: true}
-	titleRow := container.NewHBox(title, container.NewCenter(vBadge))
+	// Modern version badge
+	vBadge := widget.NewLabelWithStyle("v"+d.w.version, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	vBadge.Importance = widget.SuccessImportance
 
-	sub := widget.NewLabel("Automated SFTP synchronization, SHA-256 integrity verification, and archiving.")
-	sub.Importance = widget.LowImportance
+	badgeContainer := container.NewStack(
+		canvas.NewRectangle(ColorSuccessGlow),
+		container.NewPadded(vBadge),
+	)
+
+	titleRow := container.NewHBox(
+		title,
+		layout.NewSpacer(),
+		badgeContainer,
+	)
+
+	// Improved subtitle with better typography
+	sub := widget.NewLabel("Automated SFTP synchronization · SHA-256 integrity · Smart archiving")
+	sub.Importance = widget.MediumImportance
 	sub.Wrapping = fyne.TextWrapWord
-	header := container.NewBorder(nil, nil, container.NewPadded(logo), nil, container.NewVBox(titleRow, sub))
 
-	d.srcRow = newServerStatusRow("SOURCE SERVER")
-	d.dstRow = newServerStatusRow("TARGET SERVER")
-	d.scanRow = newServerStatusRow("RELAY ENGINE")
+	// Enhanced header layout
+	logoWithPadding := container.NewPadded(container.NewCenter(logo))
+	headerContent := container.NewVBox(
+		titleRow,
+		container.NewPadded(sub),
+	)
+	header := container.NewBorder(nil, nil, logoWithPadding, nil, headerContent)
 
-	status := widget.NewCard("Connections & Engine", "", container.NewVBox(
+	d.srcRow = newServerStatusRow("📥  SOURCE SERVER")
+	d.dstRow = newServerStatusRow("📤  TARGET SERVER")
+	d.scanRow = newServerStatusRow("⚡  RELAY ENGINE")
+
+	// Enhanced status card with better spacing
+	statusTitle := canvas.NewText("Connection Status", ColorForeground)
+	statusTitle.TextSize = 18
+	statusTitle.TextStyle = fyne.TextStyle{Bold: true}
+
+	status := widget.NewCard("", "", container.NewVBox(
+		statusTitle,
+		container.NewPadded(widget.NewSeparator()),
 		d.srcRow.box,
-		widget.NewSeparator(),
+		container.NewPadded(widget.NewSeparator()),
 		d.dstRow.box,
-		widget.NewSeparator(),
+		container.NewPadded(widget.NewSeparator()),
 		d.scanRow.box,
 	))
 
+	// Enhanced stat values with better typography
 	d.deliveredVal = canvas.NewText("0", ColorAccent)
-	d.deliveredVal.TextSize = 28
+	d.deliveredVal.TextSize = 36
 	d.deliveredVal.TextStyle = fyne.TextStyle{Bold: true}
 
 	d.failedVal = canvas.NewText("0", ColorMuted)
-	d.failedVal.TextSize = 28
+	d.failedVal.TextSize = 36
 	d.failedVal.TextStyle = fyne.TextStyle{Bold: true}
 
 	d.volVal = canvas.NewText("0 B", ColorForeground)
-	d.volVal.TextSize = 22
+	d.volVal.TextSize = 32
 	d.volVal.TextStyle = fyne.TextStyle{Bold: true}
 
-	stats := container.NewGridWithColumns(3,
-		statCard("Relayed Today", d.deliveredVal),
-		statCard("Failed Today", d.failedVal),
-		statCard("Data Transferred", d.volVal),
+	// Modern stats grid with better labels
+	statsTitle := canvas.NewText("📊  Today's Statistics", ColorForeground)
+	statsTitle.TextSize = 18
+	statsTitle.TextStyle = fyne.TextStyle{Bold: true}
+
+	stats := container.NewVBox(
+		statsTitle,
+		container.NewPadded(widget.NewSeparator()),
+		container.NewGridWithColumns(3,
+			statCard("Files Relayed", d.deliveredVal),
+			statCard("Failed Transfers", d.failedVal),
+			statCard("Data Volume", d.volVal),
+		),
 	)
 
+	// Enhanced control buttons with modern styling
 	d.toggle = widget.NewButtonWithIcon("Start Relay", theme.MediaPlayIcon(), d.onToggle)
 	d.toggle.Importance = widget.HighImportance
+
 	d.scan = widget.NewButtonWithIcon("Scan Now", theme.ViewRefreshIcon(), func() {
 		d.w.ctl.Engine.ScanNow()
 	})
-	controls := container.NewGridWithColumns(2, d.toggle, d.scan)
+	d.scan.Importance = widget.MediumImportance
 
-	d.idle = widget.NewLabelWithStyle("No transfers in progress · Standing by", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
-	d.idle.Importance = widget.LowImportance
+	controlTitle := canvas.NewText("🎮  Control Panel", ColorForeground)
+	controlTitle.TextSize = 18
+	controlTitle.TextStyle = fyne.TextStyle{Bold: true}
+
+	controls := container.NewVBox(
+		controlTitle,
+		container.NewPadded(widget.NewSeparator()),
+		container.NewGridWithColumns(2, d.toggle, d.scan),
+	)
+
+	// Enhanced active transfers section
+	d.idle = widget.NewLabelWithStyle("💤  No transfers in progress · Standing by", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
+	d.idle.Importance = widget.MediumImportance
+
 	d.transfers = container.NewVBox(container.NewPadded(d.idle))
-	d.activeCard = widget.NewCard("Active Transfers", "", d.transfers)
+	d.activeCard = widget.NewCard("🔄  Active Transfers", "", d.transfers)
+
+	// Modern activity feed
+	feedTitle := canvas.NewText("📡  Live Activity Feed", ColorForeground)
+	feedTitle.TextSize = 18
+	feedTitle.TextStyle = fyne.TextStyle{Bold: true}
 
 	d.feedList = widget.NewList(
 		func() int { return len(d.feed) },
 		func() fyne.CanvasObject {
 			ts := widget.NewLabel("00:00:00")
 			ts.TextStyle = fyne.TextStyle{Monospace: true}
-			ts.Importance = widget.LowImportance
+			ts.Importance = widget.MediumImportance
 			msg := widget.NewLabel("")
 			msg.Truncation = fyne.TextTruncateEllipsis
 			return container.NewBorder(nil, nil, ts, nil, msg)
@@ -186,11 +261,37 @@ func (d *dashboard) build() {
 			}
 		},
 	)
-	left := container.NewVBox(status, stats, controls)
-	right := container.NewBorder(d.activeCard, nil, nil, nil,
-		container.NewBorder(widget.NewLabelWithStyle("Live Activity Feed", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, nil, nil, d.feedList))
+
+	// Enhanced two-column layout with better proportions
+	left := container.NewVBox(
+		container.NewPadded(status),
+		container.NewPadded(stats),
+		container.NewPadded(controls),
+	)
+
+	right := container.NewBorder(
+		container.NewPadded(d.activeCard),
+		nil, nil, nil,
+		container.NewBorder(
+			container.NewPadded(feedTitle),
+			nil, nil, nil,
+			d.feedList,
+		),
+	)
+
 	body := container.New(layout.NewGridLayoutWithColumns(2), left, right)
-	d.content = container.NewPadded(container.NewBorder(container.NewVBox(header, widget.NewSeparator()), nil, nil, nil, body))
+
+	// Final layout with enhanced spacing
+	d.content = container.NewPadded(
+		container.NewBorder(
+			container.NewVBox(
+				header,
+				container.NewPadded(widget.NewSeparator()),
+			),
+			nil, nil, nil,
+			body,
+		),
+	)
 	d.render(d.w.ctl.Engine.Status())
 }
 
@@ -265,7 +366,7 @@ func (d *dashboard) row(file string) *transferRow {
 	d.rows[file] = r
 	d.transfers.Remove(d.idle)
 	d.transfers.Add(r.box)
-	d.activeCard.SetTitle(fmt.Sprintf("Active Transfers (%d)", len(d.rows)))
+	d.activeCard.SetTitle(fmt.Sprintf("🔄  Active Transfers (%d)", len(d.rows)))
 	return r
 }
 
@@ -276,9 +377,9 @@ func (d *dashboard) dropRow(file string) {
 	}
 	if len(d.rows) == 0 && len(d.transfers.Objects) == 0 {
 		d.transfers.Add(d.idle)
-		d.activeCard.SetTitle("Active Transfers")
+		d.activeCard.SetTitle("🔄  Active Transfers")
 	} else if len(d.rows) > 0 {
-		d.activeCard.SetTitle(fmt.Sprintf("Active Transfers (%d)", len(d.rows)))
+		d.activeCard.SetTitle(fmt.Sprintf("🔄  Active Transfers (%d)", len(d.rows)))
 	}
 }
 

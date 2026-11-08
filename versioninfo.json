@@ -1,13 +1,13 @@
 {
   "FixedFileInfo": {
     "FileVersion": {
-      "Major": 1,
+      "Major": 2,
       "Minor": 0,
       "Patch": 0,
       "Build": 0
     },
     "ProductVersion": {
-      "Major": 1,
+      "Major": 2,
       "Minor": 0,
       "Patch": 0,
       "Build": 0
@@ -19,15 +19,15 @@
     "FileSubtype": "00"
   },
   "StringFileInfo": {
-    "Comments": "SFTP Watchdog",
+    "Comments": "Relays files between SFTP servers and archives the originals",
     "CompanyName": "Fabrian Ivan Prasetya",
-    "FileDescription": "SFTP Watchdog (id.fabrianivan.sftpwatchdog)",
-    "FileVersion": "1.0.0",
-    "InternalName": "id.fabrianivan.sftpwatchdog",
-    "LegalCopyright": "© 2025 Fabrian Ivan Prasetya",
-    "OriginalFilename": "sftpwatchdog.exe",
-    "ProductName": "id.fabrianivan.sftpwatchdog",
-    "ProductVersion": "1.0.0"
+    "FileDescription": "SFTP Relay",
+    "FileVersion": "2.0.0",
+    "InternalName": "sftp-relay",
+    "LegalCopyright": "© 2025–2026 Fabrian Ivan Prasetya",
+    "OriginalFilename": "sftp-relay.exe",
+    "ProductName": "SFTP Relay",
+    "ProductVersion": "2.0.0"
   },
   "VarFileInfo": {
     "Translation": {
@@ -35,5 +35,6 @@
       "CharsetID": "04B0"
     }
   },
-  "IconPath": "assets/logo.ico"
+  "IconPath": "assets/logo.ico",
+  "ManifestPath": "app.manifest"
 }

@@ -2,308 +2,322 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"SFTPUpload/internal/config"
-	"SFTPUpload/internal/service"
+	"github.com/fabrianivan/sftp-relay/internal/relay"
 )
 
-// Dashboard provides the main status and control tab.
-type Dashboard struct {
-	container *fyne.Container
-	svc       *service.Service
-	cfg       *config.Config
+const maxActivity = 60
 
-	// Status indicators
-	srcStatus     *canvas.Circle
-	srcLabel      *widget.Label
-	dstStatus     *canvas.Circle
-	dstLabel      *widget.Label
-	scannerStatus *widget.Label
-	lastScanLabel *widget.Label
-	nextScanLabel *widget.Label
-	filesLabel    *widget.Label
-	scheduleLabel *widget.Label
-
-	// Controls
-	toggleBtn *widget.Button
-	scanBtn   *widget.Button
-
-	// Progress area
-	progressBox  *fyne.Container
-	progressBars map[string]*widget.ProgressBar
-
-	// Event display
-	eventLabel *widget.Label
-
-	// Counters
-	filesProcessed int
+type activity struct {
+	at   time.Time
+	text string
+	bad  bool
 }
 
-// NewDashboard creates the dashboard tab.
-func NewDashboard(svc *service.Service, cfg *config.Config) *Dashboard {
-	d := &Dashboard{
-		svc:          svc,
-		cfg:          cfg,
-		progressBars: make(map[string]*widget.ProgressBar),
-	}
+type transferRow struct {
+	box *fyne.Container
+	bar *widget.ProgressBar
+}
 
-	d.buildUI()
-	go d.listenEvents()
-	go d.listenStats()
-	go d.updateLoop()
+type dashboard struct {
+	w       *Window
+	content fyne.CanvasObject
 
+	srcDot, dstDot, scanDot *canvas.Circle
+	srcText, dstText        *widget.Label
+	scanText, nextText      *widget.Label
+	delivered, failed, vol  *widget.Label
+	toggle, scan            *widget.Button
+	transfers               *fyne.Container
+	idle                    *widget.Label
+	rows                    map[string]*transferRow
+	feed                    []activity
+	feedList                *widget.List
+
+	onStateChange func(running bool)
+	lastRunning   *bool
+}
+
+func newDashboard(w *Window) *dashboard {
+	d := &dashboard{w: w, rows: map[string]*transferRow{}}
+	d.build()
+	go d.listen()
+	go d.poll()
 	return d
 }
 
-// Container returns the Fyne container for this tab.
-func (d *Dashboard) Container() *fyne.Container {
-	return d.container
+func dot() *canvas.Circle {
+	c := canvas.NewCircle(ColorMuted)
+	return c
 }
 
-func (d *Dashboard) buildUI() {
-	// === Header Section ===
-	title := canvas.NewText("SFTP WATCHDOG", ColorIndigo)
+func dotCell(c *canvas.Circle) fyne.CanvasObject {
+	return container.NewGridWrap(fyne.NewSize(12, 12), c)
+}
+
+func statCard(title string, value *widget.Label) fyne.CanvasObject {
+	value.TextStyle = fyne.TextStyle{Bold: true}
+	value.Alignment = fyne.TextAlignCenter
+	t := widget.NewLabel(title)
+	t.Alignment = fyne.TextAlignCenter
+	t.Importance = widget.LowImportance
+	return widget.NewCard("", "", container.NewVBox(value, t))
+}
+
+func (d *dashboard) build() {
+	logo := canvas.NewImageFromResource(Icon())
+	logo.FillMode = canvas.ImageFillContain
+	logo.SetMinSize(fyne.NewSize(52, 52))
+	title := canvas.NewText(AppName, ColorAccent)
 	title.TextSize = 24
 	title.TextStyle = fyne.TextStyle{Bold: true}
+	sub := widget.NewLabel("Moves new files from the source server to the target, verifies them, then archives the originals.")
+	sub.Importance = widget.LowImportance
+	sub.Wrapping = fyne.TextWrapWord
+	header := container.NewBorder(nil, nil, logo, nil, container.NewVBox(title, sub))
 
-	subtitle := canvas.NewText("Automated File Transfer Monitor & Sync Utility", ColorMuted)
-	subtitle.TextSize = 12
-
-	var headerLogo fyne.CanvasObject
-	logoImg := canvas.NewImageFromFile("assets/logo.png")
-	if logoImg != nil {
-		logoImg.FillMode = canvas.ImageFillContain
-		logoImg.SetMinSize(fyne.NewSize(50, 50))
-		headerLogo = logoImg
-	} else {
-		headerLogo = canvas.NewCircle(ColorIndigo)
-		headerLogo.Resize(fyne.NewSize(50, 50))
+	d.srcDot, d.dstDot, d.scanDot = dot(), dot(), dot()
+	d.srcText, d.dstText = widget.NewLabel("Source: —"), widget.NewLabel("Target: —")
+	d.scanText, d.nextText = widget.NewLabel("Scanner: —"), widget.NewLabel("")
+	d.nextText.Importance = widget.LowImportance
+	for _, l := range []*widget.Label{d.srcText, d.dstText, d.scanText} {
+		l.Wrapping = fyne.TextWrapWord
 	}
-
-	headerText := container.NewVBox(title, subtitle)
-	header := container.NewHBox(
-		headerLogo,
-		layout.NewSpacer(),
-		headerText,
-		layout.NewSpacer(),
-	)
-
-	// === Connection Status ===
-	d.srcStatus = canvas.NewCircle(ColorMuted)
-	d.srcStatus.Resize(fyne.NewSize(12, 12))
-	d.srcLabel = widget.NewLabel("Source: Connecting...")
-	d.srcLabel.TextStyle = fyne.TextStyle{Bold: true}
-
-	d.dstStatus = canvas.NewCircle(ColorMuted)
-	d.dstStatus.Resize(fyne.NewSize(12, 12))
-	d.dstLabel = widget.NewLabel("Destination: Connecting...")
-	d.dstLabel.TextStyle = fyne.TextStyle{Bold: true}
-
-	srcRow := container.NewHBox(
-		container.NewCenter(d.srcStatus),
-		d.srcLabel,
-	)
-	dstRow := container.NewHBox(
-		container.NewCenter(d.dstStatus),
-		d.dstLabel,
-	)
-
-	connectionCard := widget.NewCard("Connection Status", "Monitor SFTP server connectivity", container.NewVBox(srcRow, dstRow))
-
-	// === Scanner Status ===
-	d.scannerStatus = widget.NewLabel("Scanner: Stopped")
-	d.scannerStatus.TextStyle = fyne.TextStyle{Bold: true}
-
-	d.lastScanLabel = widget.NewLabel("Last scan: —")
-	d.nextScanLabel = widget.NewLabel("Poll interval: —")
-	d.filesLabel = widget.NewLabel("Files processed: 0")
-	d.scheduleLabel = widget.NewLabel("Schedule: —")
-	d.eventLabel = widget.NewLabel("Waiting for action...")
-
-	// Update schedule label
-	if d.cfg.ActiveSchedule.Enabled {
-		d.scheduleLabel.SetText(fmt.Sprintf("Schedule: %s – %s (%s)",
-			d.cfg.ActiveSchedule.Start, d.cfg.ActiveSchedule.End, d.cfg.ActiveSchedule.Timezone))
-	} else {
-		d.scheduleLabel.SetText("Schedule: Always active (24/7)")
-	}
-
-	d.nextScanLabel.SetText(fmt.Sprintf("Poll interval: %ds", d.cfg.PollInterval))
-
-	statusCard := widget.NewCard("Scanner Status", "Scheduler activity tracking", container.NewVBox(
-		d.scannerStatus,
-		d.lastScanLabel,
-		d.nextScanLabel,
-		d.filesLabel,
-		d.scheduleLabel,
+	status := widget.NewCard("Status", "", container.NewVBox(
+		container.NewBorder(nil, nil, container.NewCenter(dotCell(d.srcDot)), nil, d.srcText),
+		container.NewBorder(nil, nil, container.NewCenter(dotCell(d.dstDot)), nil, d.dstText),
+		container.NewBorder(nil, nil, container.NewCenter(dotCell(d.scanDot)), nil, d.scanText),
+		d.nextText,
 	))
 
-	// === Controls ===
-	d.toggleBtn = widget.NewButtonWithIcon("Start Scanner", theme.MediaPlayIcon(), func() {
-		if d.svc.IsRunning() {
-			d.svc.Stop()
-			d.toggleBtn.SetText("Start Scanner")
-			d.toggleBtn.SetIcon(theme.MediaPlayIcon())
-			d.toggleBtn.Importance = widget.HighImportance
-			d.scannerStatus.SetText("Scanner: Stopped")
-		} else {
-			d.svc.Start()
-			d.toggleBtn.SetText("Stop Scanner")
-			d.toggleBtn.SetIcon(theme.MediaStopIcon())
-			d.toggleBtn.Importance = widget.DangerImportance
-			d.scannerStatus.SetText("Scanner: Running")
-		}
+	d.delivered, d.failed, d.vol = widget.NewLabel("0"), widget.NewLabel("0"), widget.NewLabel("0 B")
+	stats := container.NewGridWithColumns(3,
+		statCard("relayed today", d.delivered),
+		statCard("failed today", d.failed),
+		statCard("transferred today", d.vol),
+	)
+
+	d.toggle = widget.NewButtonWithIcon("Start", theme.MediaPlayIcon(), d.onToggle)
+	d.toggle.Importance = widget.HighImportance
+	d.scan = widget.NewButtonWithIcon("Scan now", theme.ViewRefreshIcon(), func() {
+		d.w.ctl.Engine.ScanNow()
 	})
-	d.toggleBtn.Importance = widget.HighImportance
+	controls := container.NewGridWithColumns(2, d.toggle, d.scan)
 
-	d.scanBtn = widget.NewButtonWithIcon("Scan Now", theme.SearchIcon(), func() {
-		d.svc.ScanNow()
-		d.eventLabel.SetText("Manual scan triggered...")
-	})
+	d.idle = widget.NewLabel("No transfers in progress")
+	d.idle.Importance = widget.LowImportance
+	d.transfers = container.NewVBox(d.idle)
+	active := widget.NewCard("Active transfers", "", d.transfers)
 
-	controlsCard := widget.NewCard("Control Panel", "Manual scheduler controls", container.NewVBox(
-		container.NewGridWithColumns(2, d.toggleBtn, d.scanBtn),
-	))
-
-	// === Upload Progress ===
-	d.progressBox = container.NewVBox()
-	progressCard := widget.NewCard("Active File Transfers", "Real-time sync progress", d.progressBox)
-
-	// === Event Display ===
-	eventCard := widget.NewCard("Recent Activity", "Log snapshot", d.eventLabel)
-
-	// === 2-Column Dashboard Layout ===
-	leftCol := container.NewVBox(
-		connectionCard,
-		statusCard,
-		controlsCard,
-	)
-	rightCol := container.NewVBox(
-		progressCard,
-		eventCard,
-	)
-
-	dashboardGrid := container.New(layout.NewGridLayout(2), leftCol, rightCol)
-
-	content := container.NewVBox(
-		header,
-		widget.NewSeparator(),
-		dashboardGrid,
-		layout.NewSpacer(),
-	)
-
-	scroll := container.NewVScroll(content)
-	scroll.SetMinSize(fyne.NewSize(500, 400))
-
-	d.container = container.NewStack(scroll)
-}
-
-func (d *Dashboard) listenEvents() {
-	for event := range d.svc.EventsCh {
-		switch event.Type {
-		case "scan_start":
-			d.eventLabel.SetText("⏳ " + event.Message)
-		case "scan_end":
-			d.eventLabel.SetText("✅ " + event.Message)
-			d.lastScanLabel.SetText(fmt.Sprintf("Last scan: %s", time.Now().Format(time.TimeOnly)))
-		case "upload_start":
-			d.eventLabel.SetText("📤 Uploading: " + event.Message)
-		case "upload_done":
-			d.filesProcessed++
-			d.filesLabel.SetText(fmt.Sprintf("Files processed: %d", d.filesProcessed))
-			d.eventLabel.SetText("✅ Uploaded: " + event.Message)
-			d.removeProgressBar(event.Message)
-		case "upload_fail":
-			d.eventLabel.SetText("❌ Failed: " + event.Message)
-			d.removeProgressBar(event.Message)
-		case "status":
-			d.eventLabel.SetText("ℹ️ " + event.Message)
-		case "error":
-			d.eventLabel.SetText("⚠️ " + event.Message)
-		}
-	}
-}
-
-func (d *Dashboard) listenStats() {
-	for stat := range d.svc.StatsCh {
-		bar, exists := d.progressBars[stat.Filename]
-		if !exists {
-			bar = widget.NewProgressBar()
-			bar.TextFormatter = func() string {
-				return fmt.Sprintf("%s — %s", stat.Filename, stat.Speed)
+	d.feedList = widget.NewList(
+		func() int { return len(d.feed) },
+		func() fyne.CanvasObject {
+			ts := widget.NewLabel("00:00:00")
+			ts.TextStyle = fyne.TextStyle{Monospace: true}
+			ts.Importance = widget.LowImportance
+			msg := widget.NewLabel("")
+			msg.Truncation = fyne.TextTruncateEllipsis
+			return container.NewBorder(nil, nil, ts, nil, msg)
+		},
+		func(i widget.ListItemID, o fyne.CanvasObject) {
+			a := d.feed[len(d.feed)-1-i]
+			c := o.(*fyne.Container)
+			msg := c.Objects[0].(*widget.Label)
+			ts := c.Objects[1].(*widget.Label)
+			ts.SetText(a.at.Format(time.TimeOnly))
+			msg.SetText(a.text)
+			if a.bad {
+				msg.Importance = widget.DangerImportance
+			} else {
+				msg.Importance = widget.MediumImportance
 			}
-			d.progressBars[stat.Filename] = bar
-			d.progressBox.Add(container.NewVBox(
-				widget.NewLabel("📄 "+stat.Filename),
-				bar,
-			))
-		}
-		bar.SetValue(stat.Percent)
-		bar.TextFormatter = func() string {
-			return fmt.Sprintf("%.1f%% — %s", stat.Percent*100, stat.Speed)
-		}
-		bar.Refresh()
+			msg.Refresh()
+		},
+	)
+	left := container.NewVBox(status, stats, controls)
+	right := container.NewBorder(active, nil, nil, nil,
+		container.NewBorder(widget.NewLabelWithStyle("Recent activity", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, nil, nil, d.feedList))
+	body := container.New(layout.NewGridLayoutWithColumns(2), left, right)
+	d.content = container.NewPadded(container.NewBorder(container.NewVBox(header, widget.NewSeparator()), nil, nil, nil, body))
+	d.render(d.w.ctl.Engine.Status())
+}
+
+func (d *dashboard) onToggle() {
+	eng := d.w.ctl.Engine
+	if eng.Running() {
+		go eng.Stop()
+		return
+	}
+	if err := d.w.ctl.Config().Validate(); err != nil {
+		dialog.ShowError(fmt.Errorf("fix the configuration first:\n%w", err), d.w.win)
+		d.w.tabs.SelectIndex(2)
+		return
+	}
+	eng.Start()
+}
+
+func (d *dashboard) addActivity(text string, bad bool) {
+	d.feed = append(d.feed, activity{at: time.Now(), text: text, bad: bad})
+	if len(d.feed) > maxActivity {
+		d.feed = d.feed[len(d.feed)-maxActivity:]
+	}
+	d.feedList.Refresh()
+}
+
+// listen applies engine events on the UI thread.
+func (d *dashboard) listen() {
+	events, _ := d.w.ctl.Engine.Subscribe()
+	for ev := range events {
+		ev := ev
+		fyne.Do(func() { d.apply(ev) })
 	}
 }
 
-func (d *Dashboard) removeProgressBar(filename string) {
-	if _, exists := d.progressBars[filename]; exists {
-		delete(d.progressBars, filename)
-		d.progressBox.RemoveAll()
-		for fn, bar := range d.progressBars {
-			d.progressBox.Add(container.NewVBox(
-				widget.NewLabel("📄 "+fn),
-				bar,
-			))
+func (d *dashboard) apply(ev relay.Event) {
+	switch ev.Kind {
+	case relay.TransferStarted:
+		d.row(ev.File)
+		d.addActivity("Started "+ev.File+" ("+relay.HumanBytes(ev.Size)+")", false)
+	case relay.TransferProgress:
+		r := d.row(ev.File)
+		if ev.Size > 0 {
+			r.bar.SetValue(float64(ev.Transferred) / float64(ev.Size))
 		}
+		speed := relay.HumanBytes(int64(ev.Speed)) + "/s"
+		r.bar.TextFormatter = func() string { return fmt.Sprintf("%.0f%%  ·  %s", r.bar.Value*100, speed) }
+		r.bar.Refresh()
+	case relay.TransferDone:
+		d.dropRow(ev.File)
+		d.addActivity("✓ "+ev.File+" "+ev.Message, false)
+		d.w.history.refreshIfVisible()
+	case relay.TransferFailed:
+		d.dropRow(ev.File)
+		d.addActivity("✗ "+ev.File+": "+ev.Message, ev.Err)
+		d.w.history.refreshIfVisible()
+	case relay.ScanFinished, relay.StateChanged:
+		if !ev.Quiet {
+			d.addActivity(ev.Message, ev.Err)
+		}
+		d.render(d.w.ctl.Engine.Status())
 	}
 }
 
-func (d *Dashboard) updateLoop() {
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
+func (d *dashboard) row(file string) *transferRow {
+	if r, ok := d.rows[file]; ok {
+		return r
+	}
+	name := widget.NewLabel(file)
+	name.Truncation = fyne.TextTruncateEllipsis
+	bar := widget.NewProgressBar()
+	r := &transferRow{box: container.NewVBox(name, bar), bar: bar}
+	d.rows[file] = r
+	d.transfers.Remove(d.idle)
+	d.transfers.Add(r.box)
+	return r
+}
 
-	for range ticker.C {
-		if d.svc.SourceConnected() {
-			d.srcStatus.FillColor = ColorGreen
-			d.srcLabel.SetText(fmt.Sprintf("Source: %s ● Connected", d.cfg.SourceSFTP.Host))
-		} else {
-			d.srcStatus.FillColor = ColorRed
-			d.srcLabel.SetText(fmt.Sprintf("Source: %s ● Disconnected", d.cfg.SourceSFTP.Host))
-		}
-		d.srcStatus.Refresh()
-
-		if d.cfg.TargetSFTP.Host == "" {
-			d.dstStatus.FillColor = ColorYellow
-			d.dstLabel.SetText("Destination: Backup-only mode")
-		} else if d.svc.DestConnected() {
-			d.dstStatus.FillColor = ColorGreen
-			d.dstLabel.SetText(fmt.Sprintf("Destination: %s ● Connected", d.cfg.TargetSFTP.Host))
-		} else {
-			d.dstStatus.FillColor = ColorRed
-			d.dstLabel.SetText(fmt.Sprintf("Destination: %s ● Disconnected", d.cfg.TargetSFTP.Host))
-		}
-		d.dstStatus.Refresh()
-
-		if d.svc.IsRunning() {
-			d.scannerStatus.SetText("Scanner: Running")
-			d.toggleBtn.SetText("Stop Scanner")
-			d.toggleBtn.SetIcon(theme.MediaStopIcon())
-			d.toggleBtn.Importance = widget.DangerImportance
-		} else {
-			d.scannerStatus.SetText("Scanner: Stopped")
-			d.toggleBtn.SetText("Start Scanner")
-			d.toggleBtn.SetIcon(theme.MediaPlayIcon())
-			d.toggleBtn.Importance = widget.HighImportance
-		}
+func (d *dashboard) dropRow(file string) {
+	if r, ok := d.rows[file]; ok {
+		d.transfers.Remove(r.box)
+		delete(d.rows, file)
+	}
+	if len(d.rows) == 0 && len(d.transfers.Objects) == 0 {
+		d.transfers.Add(d.idle)
 	}
 }
 
+func (d *dashboard) poll() {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for range t.C {
+		s := d.w.ctl.Engine.Status()
+		fyne.Do(func() { d.render(s) })
+	}
+}
+
+func setDot(c *canvas.Circle, col color.Color) {
+	if c.FillColor != col {
+		c.FillColor = col
+		c.Refresh()
+	}
+}
+
+func (d *dashboard) render(s relay.Status) {
+	cfg := d.w.ctl.Config()
+	src := fmt.Sprintf("Source  %s  %s", cfg.Source.Addr(), cfg.Source.Directory)
+	if s.SourceConnected {
+		setDot(d.srcDot, ColorSuccess)
+		d.srcText.SetText(src + "  · connected")
+	} else {
+		setDot(d.srcDot, ColorMuted)
+		d.srcText.SetText(src + "  · idle")
+	}
+	switch {
+	case !s.TargetEnabled:
+		setDot(d.dstDot, ColorWarning)
+		d.dstText.SetText("Target  none — archive-only mode")
+	case s.TargetConnected:
+		setDot(d.dstDot, ColorSuccess)
+		d.dstText.SetText(fmt.Sprintf("Target  %s  %s  · connected", cfg.Target.Addr(), cfg.Target.Directory))
+	default:
+		setDot(d.dstDot, ColorMuted)
+		d.dstText.SetText(fmt.Sprintf("Target  %s  %s  · idle", cfg.Target.Addr(), cfg.Target.Directory))
+	}
+
+	switch {
+	case s.Scanning:
+		setDot(d.scanDot, ColorAccent)
+		d.scanText.SetText("Scanner  scanning…")
+	case s.Running && !s.ScheduleActive:
+		setDot(d.scanDot, ColorWarning)
+		d.scanText.SetText(fmt.Sprintf("Scanner  waiting for active hours (%s–%s)", cfg.ActiveSchedule.Start, cfg.ActiveSchedule.End))
+	case s.Running:
+		setDot(d.scanDot, ColorSuccess)
+		d.scanText.SetText(fmt.Sprintf("Scanner  running every %ds", cfg.PollInterval))
+	default:
+		setDot(d.scanDot, ColorError)
+		d.scanText.SetText("Scanner  paused")
+	}
+	next := ""
+	if !s.LastScan.IsZero() {
+		next = "Last scan " + s.LastScan.Format(time.TimeOnly)
+	}
+	if s.Running && !s.NextScan.IsZero() {
+		if in := time.Until(s.NextScan).Round(time.Second); in > 0 {
+			next += fmt.Sprintf(" · next in %s", in)
+		}
+	}
+	d.nextText.SetText(next)
+
+	d.delivered.SetText(fmt.Sprint(s.Today.Delivered))
+	d.failed.SetText(fmt.Sprint(s.Today.Failed))
+	d.vol.SetText(relay.HumanBytes(s.Today.Bytes))
+
+	if d.lastRunning == nil || *d.lastRunning != s.Running {
+		running := s.Running
+		d.lastRunning = &running
+		if running {
+			d.toggle.SetText("Pause")
+			d.toggle.SetIcon(theme.MediaPauseIcon())
+			d.toggle.Importance = widget.MediumImportance
+		} else {
+			d.toggle.SetText("Start")
+			d.toggle.SetIcon(theme.MediaPlayIcon())
+			d.toggle.Importance = widget.HighImportance
+		}
+		d.toggle.Refresh()
+		if d.onStateChange != nil {
+			d.onStateChange(running)
+		}
+	}
+}

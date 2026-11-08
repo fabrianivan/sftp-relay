@@ -1,173 +1,265 @@
+// Command sftp-relay watches a folder on one SFTP server, relays new files to
+// another, verifies them and archives the originals into dated folders.
+//
+// Run without flags for the desktop app, or use -headless / -once on servers.
 package main
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
+	fyneapp "fyne.io/fyne/v2/app"
+	"golang.org/x/term"
 
-	"SFTPUpload/internal/config"
-	"SFTPUpload/internal/logging"
-	"SFTPUpload/internal/notifier"
-	"SFTPUpload/internal/service"
-	"SFTPUpload/internal/sftpclient"
-	"SFTPUpload/internal/uploaded"
-	"SFTPUpload/ui"
+	"github.com/fabrianivan/sftp-relay/internal/config"
+	"github.com/fabrianivan/sftp-relay/internal/history"
+	"github.com/fabrianivan/sftp-relay/internal/logging"
+	"github.com/fabrianivan/sftp-relay/internal/notifier"
+	"github.com/fabrianivan/sftp-relay/internal/relay"
+	"github.com/fabrianivan/sftp-relay/internal/secrets"
+	"github.com/fabrianivan/sftp-relay/internal/setup"
+	"github.com/fabrianivan/sftp-relay/ui"
 )
 
+// version is set at build time with -ldflags "-X main.version=1.2.3".
 var version = "dev"
+
+const appID = "id.fabrianivan.sftprelay"
 
 func main() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "FATAL PANIC: %v\n%s\n", r, debug.Stack())
+			fmt.Fprintf(os.Stderr, "fatal: %v\n%s\n", r, debug.Stack())
 			os.Exit(1)
 		}
 	}()
+	os.Exit(run())
+}
 
-	scanOnce := flag.Bool("scan", false, "Run a single scan (headless) and exit")
-	configPath := flag.String("config", "config.json", "Path to config file")
+func run() int {
+	var (
+		configPath  = flag.String("config", "", "config file (default: ./config.json if present, else the user config folder)")
+		headless    = flag.Bool("headless", false, "run continuously without the GUI (servers, services)")
+		once        = flag.Bool("once", false, "scan once, process all files, then exit (exit code 1 if any file failed)")
+		scanCompat  = flag.Bool("scan", false, "alias for -once (SFTP Watchdog compatibility)")
+		check       = flag.Bool("check", false, "validate the config and test both connections, then exit")
+		setPassword = flag.String("set-password", "", "store the password for `source|target` in the system keychain")
+		showVersion = flag.Bool("version", false, "print the version and exit")
+		verbose     = flag.Bool("v", false, "include debug messages in console output")
+	)
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("sftp-relay", version)
+		return 0
+	}
+	cli := *headless || *once || *scanCompat || *check || *setPassword != ""
 
-	// Load or create config
-	cfg, err := config.Load(*configPath)
+	path := *configPath
+	if path == "" {
+		path = setup.DefaultConfigPath()
+	}
+	cfg, cfgErr := config.Load(path)
+	if errors.Is(cfgErr, fs.ErrNotExist) {
+		cfg = config.Example()
+		if err := config.Save(path, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "cannot create %s: %v\n", path, err)
+			return 2
+		}
+		cfgErr = fmt.Errorf("a starter configuration was created at %s — fill in your servers", path)
+		if cli {
+			fmt.Fprintln(os.Stderr, cfgErr)
+			return 2
+		}
+	} else if cfg == nil {
+		fmt.Fprintf(os.Stderr, "cannot read %s: %v\n", path, cfgErr)
+		return 2
+	}
+
+	if *setPassword != "" {
+		return storePassword(cfg, *setPassword)
+	}
+	if cli && cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "invalid configuration in %s:\n%v\n", path, cfgErr)
+		return 2
+	}
+
+	logOpts := logging.Options{
+		Path:          config.Resolve(path, cfg.LogFile),
+		RetentionDays: cfg.LogRetentionDays,
+		MinLevel:      logging.Info,
+	}
+	if cli {
+		logOpts.Console = os.Stdout
+	}
+	if *verbose {
+		logOpts.MinLevel = logging.Debug
+	}
+	log, err := logging.New(logOpts)
 	if err != nil {
-		if os.IsNotExist(err) {
-			if err := config.WriteDefaultConfig(*configPath); err != nil {
-				fmt.Printf("Failed to create default config: %v\n", err)
-			} else {
-				fmt.Println("Created default config.json. Please edit it with your settings.")
+		fmt.Fprintf(os.Stderr, "cannot open log file: %v\n", err)
+		return 2
+	}
+	defer log.Close()
+	log.Infof("SFTP Relay %s starting (config %s)", version, path)
+
+	hist, err := history.Open(config.Resolve(path, cfg.HistoryFile), cfg.HistoryLimit)
+	if err != nil {
+		log.Warnf("%v", err)
+		if hist == nil {
+			return 2
+		}
+	}
+	store := secrets.Default()
+
+	if *check {
+		return runCheck(path, cfg, store)
+	}
+
+	var gui fyne.App
+	var notify notifier.Notifier = notifier.Noop{}
+	if !cli {
+		gui = fyneapp.NewWithID(appID)
+		gui.SetIcon(ui.Icon())
+		gui.Settings().SetTheme(ui.Theme{})
+		notify = notifier.Func(func(title, msg string) {
+			gui.SendNotification(fyne.NewNotification(ui.AppName+" — "+title, msg))
+		})
+	}
+
+	eng := relay.New(relay.Options{
+		Runtime:  setup.Runtime(path, cfg, store, log),
+		History:  hist,
+		Logger:   log,
+		Notifier: notify,
+	})
+
+	switch {
+	case *once || *scanCompat:
+		return runOnce(eng, log)
+	case *headless:
+		return runHeadless(eng, log)
+	}
+
+	ctl := setup.NewController(path, cfg, store, log, eng)
+	win := ui.NewWindow(gui, ctl, version, cfgErr)
+	if cfgErr == nil {
+		eng.Start()
+	}
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		fyne.Do(gui.Quit)
+	}()
+	win.Show()
+	gui.Run()
+
+	log.Infof("Shutting down")
+	eng.Shutdown(30 * time.Second)
+	return 0
+}
+
+func runOnce(eng *relay.Engine, log *logging.Logger) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	sum, err := eng.RunOnce(ctx)
+	eng.Shutdown(30 * time.Second)
+	if err != nil {
+		log.Errorf("%v", err)
+		return 1
+	}
+	log.Infof("Done: %d relayed, %d archived, %d failed, %d still being written",
+		sum.Delivered, sum.Archived, sum.Failed, sum.Waiting+sum.Deferred)
+	if sum.Failed > 0 {
+		return 1
+	}
+	return 0
+}
+
+func runHeadless(eng *relay.Engine, log *logging.Logger) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	eng.Start()
+	<-ctx.Done()
+	log.Infof("Signal received — finishing current transfers (up to 60s)")
+	eng.Shutdown(60 * time.Second)
+	return 0
+}
+
+func runCheck(path string, cfg *config.Config, store secrets.Store) int {
+	code := 0
+	roles := []string{setup.Source}
+	if cfg.Target.Enabled() {
+		roles = append(roles, setup.Target)
+	}
+	for _, role := range roles {
+		ep := setup.Endpoint(cfg, role)
+		fmt.Printf("%-6s %s %s ... ", role, ep.Addr(), ep.Directory)
+		res, err := setup.Test(context.Background(), path, cfg, role, store)
+		if err != nil {
+			fmt.Printf("FAILED\n       %v\n", err)
+			if res.Fingerprint != "" {
+				fmt.Printf("       host key %s %s\n", res.KeyType, res.Fingerprint)
 			}
-		} else {
-			fmt.Printf("Failed to load config: %v\n", err)
+			code = 1
+			continue
 		}
-		return
+		fmt.Printf("OK (%s)\n       host key %s %s\n       %d entries, writable: %v\n",
+			res.Elapsed.Round(time.Millisecond), res.KeyType, res.Fingerprint, res.Files, res.Writable)
+		if !res.Writable {
+			code = 1
+		}
 	}
+	return code
+}
 
-	// Initialize logger
-	logger, err := logging.Init(cfg.LogFile, cfg.LogRetentionDays)
-	if err != nil {
-		fmt.Printf("Failed to initialize log: %v\n", err)
-		return
+func storePassword(cfg *config.Config, role string) int {
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role != setup.Source && role != setup.Target {
+		fmt.Fprintln(os.Stderr, "-set-password expects 'source' or 'target'")
+		return 2
 	}
-	defer logger.Close()
-
-	logger.Write("=== SFTP Watchdog Starting (version %s) ===", version)
-
-	// Create SFTP managers
-	noopNotify := notifier.NoopNotifier{}
-	srcMgr := sftpclient.NewManager(cfg.SourceSFTP, cfg.ReconnectRetries, cfg.ReconnectInterval, cfg.IdleTimeoutSeconds, cfg.KeepAliveDuration, logger, noopNotify)
-	var dstMgr *sftpclient.Manager
-	if cfg.TargetSFTP.Host != "" {
-		dstMgr = sftpclient.NewManager(cfg.TargetSFTP, cfg.ReconnectRetries, cfg.ReconnectInterval, cfg.IdleTimeoutSeconds, cfg.KeepAliveDuration, logger, noopNotify)
+	ep := setup.Endpoint(cfg, role)
+	if !ep.Enabled() || ep.Username == "" {
+		fmt.Fprintf(os.Stderr, "configure the %s host and username first\n", role)
+		return 2
 	}
-
-	// Load upload history
-	uploadedFiles := uploaded.New("uploaded.json")
-	if err := uploadedFiles.Load(); err != nil {
-		logger.Write("WARNING: Failed to load uploaded.json: %v", err)
-		logger.Write("Falling back to in-memory upload tracking")
-		uploadedFiles.DisablePersistence()
+	fmt.Fprintf(os.Stderr, "Password for %s@%s: ", ep.Username, ep.Addr())
+	var pw string
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		pw = string(b)
 	} else {
-		logger.Write("Loaded upload history with %d processed files", len(uploadedFiles.Files))
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		pw = strings.TrimRight(line, "\r\n")
 	}
-
-	// =========================================
-	// Headless mode: single scan and exit
-	// =========================================
-	if *scanOnce {
-		svc := service.New(cfg, srcMgr, dstMgr, uploadedFiles, noopNotify, logger)
-
-		logger.Write("=== SFTP Watchdog: SINGLE-SCAN MODE ===")
-		if err := svc.ConnectAll(); err != nil {
-			logger.Write("ERROR: Failed to connect: %v", err)
-			return
-		}
-		defer svc.CloseAll()
-
-		svc.TestConnections()
-		if err := svc.PrepareDirectories(); err != nil {
-			logger.Write("ERROR: Backup directory setup failed: %v", err)
-		}
-		svc.RunImmediateScan()
-		logger.Write("=== Single scan completed; exiting. ===")
-		return
+	if pw == "" {
+		fmt.Fprintln(os.Stderr, "empty password, nothing stored")
+		return 1
 	}
-
-	// =========================================
-	// GUI mode: Fyne application
-	// =========================================
-	fyneApp := app.NewWithID("id.fabrianivan.sftpwatchdog")
-	fyneApp.Settings().SetTheme(&ui.WatchdogTheme{})
-
-	// Use Fyne notifier for GUI mode
-	fyneNotify := &fyneDesktopNotifier{fyneApp: fyneApp}
-
-	// Recreate managers with Fyne notifier
-	srcMgr = sftpclient.NewManager(cfg.SourceSFTP, cfg.ReconnectRetries, cfg.ReconnectInterval, cfg.IdleTimeoutSeconds, cfg.KeepAliveDuration, logger, fyneNotify)
-	if cfg.TargetSFTP.Host != "" {
-		dstMgr = sftpclient.NewManager(cfg.TargetSFTP, cfg.ReconnectRetries, cfg.ReconnectInterval, cfg.IdleTimeoutSeconds, cfg.KeepAliveDuration, logger, fyneNotify)
+	if err := secrets.Default().Set(secrets.Account(ep.Username, ep.Host, ep.Port), pw); err != nil {
+		fmt.Fprintf(os.Stderr, "could not store password: %v\nUse the %s environment variable instead.\n", err, secrets.EnvVar(role, "password"))
+		return 1
 	}
-
-	svc := service.New(cfg, srcMgr, dstMgr, uploadedFiles, fyneNotify, logger)
-
-	// Connect in background
-	go func() {
-		if err := svc.ConnectAll(); err != nil {
-			logger.Write("WARNING: Initial connection failed: %v", err)
-		}
-		svc.TestConnections()
-		if err := svc.PrepareDirectories(); err != nil {
-			logger.Write("ERROR: Backup directory setup failed: %v", err)
-		}
-
-		// Auto-start if initial sync is enabled
-		if cfg.EnableInitialSync == nil || *cfg.EnableInitialSync {
-			time.Sleep(2 * time.Second)
-			logger.Write("Running initial scan on startup...")
-			svc.RunImmediateScan()
-		}
-
-		// Start the scanner
-		svc.Start()
-		logger.Write("Scanner started automatically")
-	}()
-
-	// Handle OS signals
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-		<-sigCh
-		logger.Write("=== Termination signal received ===")
-		svc.Stop()
-		svc.CloseAll()
-		fyneApp.Quit()
-	}()
-
-	// Create and show GUI
-	mainApp := ui.NewApp(fyneApp, svc, cfg, *configPath, logger, version)
-	mainApp.Show()
-
-	logger.Write("GUI application started")
-	fyneApp.Run()
-
-	// Cleanup after GUI exits
-	svc.Stop()
-	svc.CloseAll()
-	logger.Write("=== Application exited ===")
-}
-
-// fyneDesktopNotifier implements notifier.Notifier using Fyne's notification API.
-type fyneDesktopNotifier struct {
-	fyneApp fyne.App
-}
-
-func (n *fyneDesktopNotifier) Notify(title, message string, _ int) {
-	n.fyneApp.SendNotification(fyne.NewNotification("SFTP Watchdog — "+title, message))
+	fmt.Fprintf(os.Stderr, "Stored in the system keychain as %s/%s.\n", secrets.Service, secrets.Account(ep.Username, ep.Host, ep.Port))
+	if ep.Password != "" {
+		fmt.Fprintln(os.Stderr, "Tip: remove the plaintext \"password\" from the config file now.")
+	}
+	return 0
 }

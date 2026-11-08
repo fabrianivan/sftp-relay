@@ -1,15 +1,24 @@
-.cache
-.build
+# Local configuration and runtime data — may contain hostnames or credentials
+config.json
+!tools/devserver/config.json
+history.json
+history.json.*
+known_hosts
+uploaded.json
+logs/
+*.log
+demo-data/
 
-# Binaries and packaging
+# Build output
 dist/
-*.app/
 *.exe
+*.app/
 *.dmg
 *.syso
+fyne-cross/
 
-# Logs
-*.log
-
-# History
-uploaded.json
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.kilo/

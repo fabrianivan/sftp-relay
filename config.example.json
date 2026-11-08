@@ -1,0 +1,49 @@
+{
+  "sourceSFTP": {
+    "host": "source.example.com",
+    "port": 22,
+    "username": "relay",
+    "directory": "/outbox"
+  },
+  "targetSFTP": {
+    "host": "target.example.com",
+    "port": 22,
+    "username": "relay",
+    "directory": "/inbox"
+  },
+  "backupDirectory": "/outbox/archive",
+  "pollInterval": 30,
+  "stableSeconds": 10,
+  "maxParallel": 2,
+  "verifyChecksum": true,
+  "include": [
+    "*"
+  ],
+  "exclude": [
+    ".*",
+    "~*",
+    "*.tmp",
+    "*.part",
+    "*.partial",
+    "*.filepart",
+    "*.crdownload"
+  ],
+  "reconnectInterval": 5,
+  "reconnectRetries": 3,
+  "keepAliveDuration": 30,
+  "maxIdleScans": 0,
+  "strictHostKeyChecking": false,
+  "knownHostsFile": "known_hosts",
+  "logFile": "logs/sftp-relay.log",
+  "logRetentionDays": 14,
+  "historyFile": "history.json",
+  "historyLimit": 1000,
+  "activeSchedule": {
+    "enabled": false,
+    "start": "06:00",
+    "end": "22:00",
+    "timezone": "Local"
+  },
+  "enableInitialSync": true,
+  "notifications": true
+}

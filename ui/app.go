@@ -1,108 +1,108 @@
+// Package ui is the Fyne desktop interface.
+//
+// Fyne 2.6+ requires every widget update from a background goroutine to go
+// through fyne.Do; all engine/log listeners in this package follow that rule.
 package ui
 
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 
-	"SFTPUpload/internal/config"
-	"SFTPUpload/internal/logging"
-	"SFTPUpload/internal/service"
+	"github.com/fabrianivan/sftp-relay/assets"
+	"github.com/fabrianivan/sftp-relay/internal/setup"
 )
 
-// App is the main application window with tabbed interface and system tray.
-type App struct {
-	fyneApp fyne.App
-	window  fyne.Window
-	svc     *service.Service
-	cfg     *config.Config
-	cfgPath string
-	logger  *logging.Logger
+// AppName is shown in titles and notifications.
+const AppName = "SFTP Relay"
+
+// Window is the main application window.
+type Window struct {
+	app     fyne.App
+	win     fyne.Window
+	ctl     *setup.Controller
 	version string
 
-	dashboard    *Dashboard
-	configEditor *ConfigEditor
-	logViewer    *LogViewer
+	tabs      *container.AppTabs
+	dashboard *dashboard
+	history   *historyView
+	settings  *settingsView
+	logs      *logView
 }
 
-// NewApp creates the main SFTP Watchdog application window.
-func NewApp(fyneApp fyne.App, svc *service.Service, cfg *config.Config, cfgPath string, logger *logging.Logger, version string) *App {
-	a := &App{
-		fyneApp: fyneApp,
-		svc:     svc,
-		cfg:     cfg,
-		cfgPath: cfgPath,
-		logger:  logger,
-		version: version,
-	}
+// Icon returns the embedded application icon.
+func Icon() fyne.Resource { return fyne.NewStaticResource("sftp-relay.png", assets.Icon) }
 
-	a.window = fyneApp.NewWindow("SFTP Watchdog v" + version)
-	a.window.Resize(fyne.NewSize(720, 560))
-	a.window.SetMaster()
+// NewWindow builds the main window. configProblem, when non-nil, opens the
+// Settings tab with the validation error shown.
+func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem error) *Window {
+	w := &Window{app: a, ctl: ctl, version: version}
+	w.win = a.NewWindow(AppName + " " + version)
+	w.win.SetIcon(Icon())
+	w.win.Resize(fyne.NewSize(980, 680))
+	w.win.SetMaster()
 
-	// Close to tray instead of quitting
-	a.window.SetCloseIntercept(func() {
-		a.window.Hide()
-	})
+	w.dashboard = newDashboard(w)
+	w.history = newHistoryView(w)
+	w.settings = newSettingsView(w)
+	w.logs = newLogView(w)
 
-	a.buildTabs()
-	a.setupSystemTray()
-
-	return a
-}
-
-func (a *App) buildTabs() {
-	// Create tab components
-	a.dashboard = NewDashboard(a.svc, a.cfg)
-	a.configEditor = NewConfigEditor(a.cfg, a.cfgPath, a.window, func(newCfg *config.Config) {
-		a.logger.Write("Configuration updated from GUI")
-	})
-	a.logViewer = NewLogViewer(a.logger, a.cfg.LogFile)
-
-	tabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), a.dashboard.Container()),
-		container.NewTabItemWithIcon("Configuration", theme.SettingsIcon(), a.configEditor.Container()),
-		container.NewTabItemWithIcon("Logs", theme.ListIcon(), a.logViewer.Container()),
+	w.tabs = container.NewAppTabs(
+		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), w.dashboard.content),
+		container.NewTabItemWithIcon("History", theme.HistoryIcon(), w.history.content),
+		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), w.settings.content),
+		container.NewTabItemWithIcon("Logs", theme.ListIcon(), w.logs.content),
 	)
-	tabs.SetTabLocation(container.TabLocationTop)
+	w.tabs.OnSelected = func(t *container.TabItem) {
+		if t.Text == "History" {
+			w.history.refresh()
+		}
+	}
+	w.win.SetContent(w.tabs)
 
-	a.window.SetContent(tabs)
+	if desk, ok := a.(desktop.App); ok {
+		w.setupTray(desk)
+		w.win.SetCloseIntercept(func() { w.win.Hide() }) // keep relaying from the tray
+	}
+
+	if configProblem != nil {
+		w.tabs.SelectIndex(2)
+		dialog.ShowError(configProblem, w.win)
+	}
+	return w
 }
 
-func (a *App) setupSystemTray() {
-	if desk, ok := a.fyneApp.(desktop.App); ok {
-		menu := fyne.NewMenu("SFTP Watchdog",
-			fyne.NewMenuItem("Show Window", func() {
-				a.window.Show()
-				a.window.RequestFocus()
-			}),
-			fyne.NewMenuItem("Scan Now", func() {
-				a.svc.ScanNow()
-				a.logger.Write("Scan triggered from system tray")
-			}),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Quit", func() {
-				a.svc.Stop()
-				a.svc.CloseAll()
-				a.fyneApp.Quit()
-			}),
-		)
-		desk.SetSystemTrayMenu(menu)
+func (w *Window) setupTray(desk desktop.App) {
+	pause := fyne.NewMenuItem("Pause scanning", nil)
+	pause.Action = func() {
+		if w.ctl.Engine.Running() {
+			w.ctl.Engine.Stop()
+		} else {
+			w.ctl.Engine.Start()
+		}
+	}
+	quit := fyne.NewMenuItem("Quit", func() { w.app.Quit() })
+	quit.IsQuit = true
+	menu := fyne.NewMenu(AppName,
+		fyne.NewMenuItem("Open "+AppName, func() { w.win.Show(); w.win.RequestFocus() }),
+		fyne.NewMenuItem("Scan now", w.ctl.Engine.ScanNow),
+		pause,
+		fyne.NewMenuItemSeparator(),
+		quit,
+	)
+	desk.SetSystemTrayIcon(Icon())
+	desk.SetSystemTrayMenu(menu)
+	w.dashboard.onStateChange = func(running bool) {
+		if running {
+			pause.Label = "Pause scanning"
+		} else {
+			pause.Label = "Resume scanning"
+		}
+		menu.Refresh()
 	}
 }
 
-// Show displays the main window.
-func (a *App) Show() {
-	a.window.Show()
-}
-
-// Window returns the underlying fyne.Window.
-func (a *App) Window() fyne.Window {
-	return a.window
-}
-
-// SendNotification sends an OS notification via Fyne.
-func (a *App) SendNotification(title, content string) {
-	a.fyneApp.SendNotification(fyne.NewNotification(title, content))
-}
+// Show displays the window.
+func (w *Window) Show() { w.win.Show() }

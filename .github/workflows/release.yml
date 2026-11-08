@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Embed icon, manifest and version
+        shell: pwsh
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.1
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          $p = ($v -split '[.-]') + @(0,0,0,0)
+          & "$(go env GOPATH)\bin\goversioninfo.exe" -64 -icon assets/logo.ico -manifest app.manifest `
+            -ver-major $p[0] -ver-minor $p[1] -ver-patch $p[2] -product-ver-major $p[0] -product-ver-minor $p[1] -product-ver-patch $p[2] `
+            -file-version $v -product-version $v versioninfo.json
+      - name: Build
+        shell: pwsh
+        run: go build -trimpath -ldflags "-H=windowsgui -s -w -X main.version=${{ github.ref_name }}" -o sftp-relay-windows-amd64.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: sftp-relay-windows-amd64.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build app bundles
+        run: |
+          go install fyne.io/tools/cmd/fyne@latest
+          V="${GITHUB_REF_NAME#v}"
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          for arch in arm64 amd64; do
+            CGO_ENABLED=1 GOARCH=$arch CGO_CFLAGS="-arch $arch" CGO_LDFLAGS="-arch $arch" \
+              "$(go env GOPATH)/bin/fyne" package --os darwin --app-version "$V" --icon assets/logo.png
+            ditto -c -k --keepParent "SFTP Relay.app" "sftp-relay-macos-$arch.zip"
+            rm -rf "SFTP Relay.app"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: sftp-relay-macos-*.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
+      - run: go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o sftp-relay-linux-amd64 .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: sftp-relay-linux-amd64
+
+  publish:
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Checksums
+        run: sha256sum sftp-relay-* > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            sftp-relay-*
+            SHA256SUMS.txt

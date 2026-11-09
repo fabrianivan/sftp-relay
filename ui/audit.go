@@ -30,12 +30,14 @@ type auditView struct {
 	refreshBtn   *widget.Button
 	exportBtn    *widget.Button
 	countLabel   *widget.Label
+	initialized  bool
 }
 
 func newAuditView(w *Window) *auditView {
 	v := &auditView{
-		w:      w,
-		events: []audit.Event{},
+		w:           w,
+		events:      []audit.Event{},
+		initialized: false,
 	}
 
 	// Initialize reader if audit log exists
@@ -51,7 +53,9 @@ func newAuditView(w *Window) *auditView {
 		"Config Changes",
 		"Engine Events",
 	}, func(string) {
-		v.refresh()
+		if v.initialized {
+			v.refresh()
+		}
 	})
 	v.filterType.SetSelected("All Events")
 
@@ -61,7 +65,9 @@ func newAuditView(w *Window) *auditView {
 		"Failed",
 		"Started",
 	}, func(string) {
-		v.refresh()
+		if v.initialized {
+			v.refresh()
+		}
 	})
 	v.filterStatus.SetSelected("All Status")
 
@@ -93,6 +99,8 @@ func newAuditView(w *Window) *auditView {
 			updateEventCard(obj.(*fyne.Container), event)
 		},
 	)
+
+	v.initialized = true
 
 	return v
 }
@@ -157,7 +165,7 @@ func (v *auditView) build() fyne.CanvasObject {
 }
 
 func (v *auditView) refresh() {
-	if v.reader == nil {
+	if v.reader == nil || v.list == nil {
 		return
 	}
 

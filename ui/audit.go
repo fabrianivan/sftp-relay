@@ -2,11 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -80,22 +83,14 @@ func newAuditView(w *Window) *auditView {
 	v.list = widget.NewList(
 		func() int { return len(v.events) },
 		func() fyne.CanvasObject {
-			return container.NewVBox(
-				widget.NewRichTextFromMarkdown(""),
-				widget.NewSeparator(),
-			)
+			return createEventCard()
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id >= len(v.events) {
 				return
 			}
-			vbox := obj.(*fyne.Container)
 			event := v.events[id]
-
-			// Format event as markdown
-			md := formatAuditEvent(event)
-			richText := vbox.Objects[0].(*widget.RichText)
-			richText.ParseMarkdown(md)
+			updateEventCard(obj.(*fyne.Container), event)
 		},
 	)
 
@@ -104,23 +99,42 @@ func newAuditView(w *Window) *auditView {
 
 func (v *auditView) build() fyne.CanvasObject {
 	if v.reader == nil {
+		emptyIcon := widget.NewIcon(theme.InfoIcon())
+		emptyText := widget.NewLabel("Audit logging is disabled")
+		emptyText.TextStyle = fyne.TextStyle{Bold: true}
+		emptyHint := widget.NewLabel("Enable audit logging in configuration to track system events")
+		emptyHint.TextStyle = fyne.TextStyle{Italic: true}
+
 		return container.NewCenter(
-			widget.NewLabel("Audit logging is disabled or not available"),
+			container.NewVBox(
+				emptyIcon,
+				emptyText,
+				emptyHint,
+			),
 		)
 	}
 
 	// Initial load
 	v.refresh()
 
-	// Filter controls
+	// Filter controls with better styling
+	typeLabel := widget.NewLabel("Type:")
+	typeLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	statusLabel := widget.NewLabel("Status:")
+	statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	limitLabel := widget.NewLabel("Limit:")
+	limitLabel.TextStyle = fyne.TextStyle{Bold: true}
+
 	filters := container.NewBorder(
 		nil, nil,
 		container.NewHBox(
-			widget.NewLabel("Type:"),
+			typeLabel,
 			v.filterType,
-			widget.NewLabel("Status:"),
+			statusLabel,
 			v.filterStatus,
-			widget.NewLabel("Limit:"),
+			limitLabel,
 			container.NewMax(
 				container.NewPadded(v.limitEntry),
 			),
@@ -221,56 +235,145 @@ func (v *auditView) exportDialog() {
 	dialog.Show()
 }
 
-func formatAuditEvent(e audit.Event) string {
-	// Status icon
-	icon := "✅"
-	if e.Status == audit.StatusFailed {
-		icon = "❌"
-	} else if e.Status == audit.StatusStarted {
-		icon = "▶️"
+func createEventCard() fyne.CanvasObject {
+	// Status bar (colored left border)
+	statusBar := canvas.NewRectangle(color.NRGBA{R: 0, G: 200, B: 0, A: 255})
+	statusBar.SetMinSize(fyne.NewSize(4, 0))
+
+	// Icon placeholder
+	icon := widget.NewIcon(theme.DocumentIcon())
+
+	// Title and timestamp line
+	title := widget.NewLabel("")
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.Wrapping = fyne.TextTruncate
+
+	timestamp := widget.NewLabel("")
+	timestamp.TextStyle = fyne.TextStyle{Italic: true}
+
+	// Details line
+	details := widget.NewLabel("")
+	details.Wrapping = fyne.TextWrapWord
+
+	// Actor line
+	actor := widget.NewLabel("")
+	actor.TextStyle = fyne.TextStyle{Monospace: true}
+
+	// Content area
+	content := container.NewVBox(
+		container.NewHBox(title, layout.NewSpacer(), timestamp),
+		details,
+		actor,
+	)
+
+	// Card with status bar on left
+	card := container.NewBorder(
+		nil, nil,
+		statusBar,
+		nil,
+		container.NewPadded(
+			container.NewHBox(
+				icon,
+				content,
+			),
+		),
+	)
+
+	// Wrap in VBox with separator for spacing
+	return container.NewVBox(
+		card,
+		widget.NewSeparator(),
+	)
+}
+
+func updateEventCard(cardContainer *fyne.Container, e audit.Event) {
+	// Get the card (first element before separator)
+	card := cardContainer.Objects[0].(*fyne.Container)
+
+	// Get status bar (left border)
+	statusBar := card.Objects[0].(*canvas.Rectangle)
+
+	// Get padded content container
+	paddedContent := card.Objects[1].(*fyne.Container)
+	contentHBox := paddedContent.Objects[0].(*fyne.Container)
+
+	// Get icon and content vbox
+	icon := contentHBox.Objects[0].(*widget.Icon)
+	content := contentHBox.Objects[1].(*fyne.Container)
+
+	// Get label widgets
+	titleRow := content.Objects[0].(*fyne.Container)
+	title := titleRow.Objects[0].(*widget.Label)
+	timestamp := titleRow.Objects[2].(*widget.Label)
+	details := content.Objects[1].(*widget.Label)
+	actor := content.Objects[2].(*widget.Label)
+
+	// Update status bar color and icon based on status
+	switch e.Status {
+	case audit.StatusSuccess:
+		statusBar.FillColor = color.NRGBA{R: 76, G: 175, B: 80, A: 255} // Green
+		icon.SetResource(theme.ConfirmIcon())
+	case audit.StatusFailed:
+		statusBar.FillColor = color.NRGBA{R: 244, G: 67, B: 54, A: 255} // Red
+		icon.SetResource(theme.ErrorIcon())
+	case audit.StatusStarted:
+		statusBar.FillColor = color.NRGBA{R: 33, G: 150, B: 243, A: 255} // Blue
+		icon.SetResource(theme.MediaPlayIcon())
+	default:
+		statusBar.FillColor = color.NRGBA{R: 158, G: 158, B: 158, A: 255} // Gray
+		icon.SetResource(theme.InfoIcon())
+	}
+	statusBar.Refresh()
+
+	// Update icon based on event type
+	switch e.EventType {
+	case audit.EventTransferStarted, audit.EventTransferCompleted, audit.EventTransferFailed:
+		icon.SetResource(theme.MailSendIcon())
+	case audit.EventConfigChanged:
+		icon.SetResource(theme.SettingsIcon())
+	case audit.EventEngineStarted, audit.EventEngineStopped:
+		icon.SetResource(theme.ComputerIcon())
+	case audit.EventFileArchived:
+		icon.SetResource(theme.FileIcon())
 	}
 
-	// Format timestamp
-	ts := e.Timestamp.Local().Format("2006-01-02 15:04:05")
+	// Update title
+	title.SetText(fmt.Sprintf("%s - %s", e.EventType, e.Status))
 
-	// Build markdown
-	md := fmt.Sprintf("## %s %s - %s\n\n", icon, e.EventType, e.Status)
-	md += fmt.Sprintf("**Time:** %s  \n", ts)
-	md += fmt.Sprintf("**Actor:** %s@%s (PID %d)  \n", e.Actor.User, e.Actor.Hostname, e.Actor.PID)
+	// Update timestamp
+	timestamp.SetText(e.Timestamp.Local().Format("Jan 02, 15:04:05"))
 
+	// Build details text
+	var detailsText string
 	if e.File != nil {
-		md += fmt.Sprintf("**File:** %s (%s)  \n", e.File.Name, humanBytes(e.File.Size))
-		if e.File.SHA256 != "" {
-			md += fmt.Sprintf("**SHA-256:** `%s...`  \n", e.File.SHA256[:12])
+		detailsText = fmt.Sprintf("File: %s (%s)", e.File.Name, humanBytes(e.File.Size))
+		if e.Duration != nil {
+			detailsText += fmt.Sprintf(" • Duration: %s", e.Duration.Round(time.Millisecond))
 		}
-	}
-
-	if e.Source != nil {
-		md += fmt.Sprintf("**Source:** %s@%s:%d%s  \n",
-			e.Source.Username, e.Source.Host, e.Source.Port, e.Source.Directory)
-	}
-
-	if e.Target != nil {
-		md += fmt.Sprintf("**Target:** %s@%s:%d%s  \n",
-			e.Target.Username, e.Target.Host, e.Target.Port, e.Target.Directory)
-	}
-
-	if e.Duration != nil {
-		md += fmt.Sprintf("**Duration:** %s  \n", e.Duration.Round(time.Millisecond))
+	} else if e.Source != nil && e.Target != nil {
+		detailsText = fmt.Sprintf("From: %s@%s → To: %s@%s",
+			e.Source.Username, e.Source.Host,
+			e.Target.Username, e.Target.Host)
+	} else if len(e.Details) > 0 {
+		// Show first detail
+		for k, v := range e.Details {
+			detailsText = fmt.Sprintf("%s: %v", k, v)
+			break
+		}
 	}
 
 	if e.Error != "" {
-		md += fmt.Sprintf("**Error:** `%s`  \n", e.Error)
-	}
-
-	if len(e.Details) > 0 {
-		md += "\n**Details:**  \n"
-		for k, v := range e.Details {
-			md += fmt.Sprintf("- %s: %v  \n", k, v)
+		if detailsText != "" {
+			detailsText += " • "
 		}
+		detailsText += fmt.Sprintf("Error: %s", e.Error)
 	}
 
-	return md
+	details.SetText(detailsText)
+
+	// Update actor
+	actor.SetText(fmt.Sprintf("Actor: %s@%s (PID %d)",
+		e.Actor.User, e.Actor.Hostname, e.Actor.PID))
 }
 
 func humanBytes(n int64) string {

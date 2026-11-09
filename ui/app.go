@@ -30,6 +30,7 @@ type Window struct {
 	history   *historyView
 	settings  *settingsView
 	logs      *logView
+	audit     *auditView
 }
 
 // Icon returns the embedded application icon.
@@ -48,17 +49,21 @@ func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem 
 	w.history = newHistoryView(w)
 	w.settings = newSettingsView(w)
 	w.logs = newLogView(w)
+	w.audit = newAuditView(w)
 
 	// Modern tabs with better icons
 	w.tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), w.dashboard.content),
 		container.NewTabItemWithIcon("History", theme.HistoryIcon(), w.history.content),
+		container.NewTabItemWithIcon("Audit", theme.DocumentIcon(), w.audit.build()),
 		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), w.settings.content),
 		container.NewTabItemWithIcon("Logs", theme.ListIcon(), w.logs.content),
 	)
 	w.tabs.OnSelected = func(t *container.TabItem) {
 		if t.Text == "History" {
 			w.history.refresh()
+		} else if t.Text == "Audit" {
+			w.audit.refresh()
 		}
 	}
 	w.win.SetContent(w.tabs)
@@ -69,7 +74,7 @@ func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem 
 	}
 
 	if configProblem != nil {
-		w.tabs.SelectIndex(2)
+		w.tabs.SelectIndex(3) // Settings tab moved to index 3
 		dialog.ShowError(configProblem, w.win)
 	}
 	return w

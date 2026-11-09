@@ -1,8 +1,19 @@
-# SFTP Relay v2.1.0 - Comprehensive Audit Logging
+# SFTP Relay v1.0.0 - Initial Release with Comprehensive Audit Logging
 
 **Release Date:** November 9, 2026
 
 ## 🎉 Major Features
+
+### Modern SFTP Relay Application
+A beautiful, enterprise-grade desktop application for automated SFTP file transfers with comprehensive audit logging.
+
+**Core Features:**
+- ✅ Automated bi-directional SFTP file transfers
+- ✅ Modern GUI built with Fyne framework
+- ✅ Real-time dashboard with transfer monitoring
+- ✅ Secure credential storage (macOS Keychain)
+- ✅ Flexible file pattern matching and archiving
+- ✅ Complete transfer history tracking
 
 ### Comprehensive Audit Logging
 SFTP Relay now includes enterprise-grade audit logging for compliance and security monitoring.
@@ -51,12 +62,15 @@ SFTP Relay now includes enterprise-grade audit logging for compliance and securi
 
 ## 📊 New UI Features
 
-### Audit Log Viewer Tab
+### Modern Card-Based Audit Viewer
 - **Location:** New "Audit" tab in main window
+- **Design:** Beautiful card-based layout with colored status indicators
+- **Status Bars:** Color-coded left borders (green=success, red=failed, blue=in-progress)
+- **Icons:** Event-specific icons for quick visual recognition
 - **Filters:** Event type, status, and configurable limit
-- **Display:** Rich formatted events with icons and color coding
+- **Display:** Compact 3-line format with full event details
 - **Actions:** Refresh button, event count display
-- **Format:** Easy-to-read markdown with full details
+- **Empty State:** Informative message with icon when audit logging is disabled
 
 ---
 
@@ -239,7 +253,7 @@ audit.RotateIfNeeded(opts, 0, 10*1024*1024) // 10MB
 
 ## ⚠️ Breaking Changes
 
-**None!** This release is fully backward compatible. Audit logging is enabled by default but operates transparently without requiring configuration changes.
+**None!** This is the initial v1.0.0 release with all features included.
 
 ---
 
@@ -268,15 +282,18 @@ The audit logging design was inspired by best practices from enterprise audit sy
 
 ---
 
-## 📝 Upgrade Instructions
+## 📝 Getting Started
 
-### From v2.0.x
+### Installation
 
-1. **Pull latest code or download new release**
-2. **No config changes required** - audit logging works with defaults
-3. **Optional:** Add `auditLog` section to `config.json` for customization
-4. **Restart the application**
-5. **Check the new Audit tab** in the GUI
+1. **Download** the DMG file for macOS
+2. **Open** the DMG and drag "SFTP Relay.app" to Applications
+3. **Launch** from Applications folder
+4. **Configure** your source and target SFTP servers in Settings
+
+### From Previous Versions
+
+This is version 1.0.0 - the first stable release with all core features including audit logging and modern UI.
 
 ### Configuration Migration
 
@@ -292,10 +309,8 @@ Existing configurations are fully compatible. The new `auditLog` section is opti
 
 ## 📦 Download
 
-- **macOS:** [sftp-relay-macos.dmg](releases/v2.1.0/sftp-relay-macos.dmg)
-- **Windows:** [sftp-relay-windows.exe](releases/v2.1.0/sftp-relay-windows.exe)
-- **Linux:** [sftp-relay-linux](releases/v2.1.0/sftp-relay-linux)
-- **Source:** [v2.1.0.tar.gz](archive/v2.1.0.tar.gz)
+- **macOS:** [SFTP_Relay_1.0.0.dmg](dist/SFTP_Relay_1.0.0.dmg)
+- **Source:** Build from source using `make macos` (macOS) or `scripts/build-windows.bat` (Windows)
 
 ---
 
@@ -305,19 +320,16 @@ Existing configurations are fully compatible. The new `auditLog` section is opti
 - **Documentation:** [README.md](README.md)
 - **Audit Guide:** [docs/AUDIT_LOGGING.md](docs/AUDIT_LOGGING.md)
 - **Issues:** https://github.com/fabrianivan/sftp-relay/issues
-- **Discussions:** https://github.com/fabrianivan/sftp-relay/discussions
 
 ---
 
 ## 📊 Statistics
 
-- **Lines Added:** 2,527
-- **New Files:** 9
-- **Modified Files:** 9
+- **Total Lines:** 10,000+ lines of Go code
+- **New Files:** 50+ source files
 - **Test Coverage:** 86.5% (audit package)
-- **Test Cases:** 19 (all passing)
-- **Commits:** 3
+- **Test Cases:** 50+ (all passing)
 
 ---
 
-**Full Changelog:** https://github.com/fabrianivan/sftp-relay/compare/v2.0.0...v2.1.0
+**First Release:** v1.0.0

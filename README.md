@@ -29,8 +29,9 @@ Many integrations still exchange files over SFTP: a partner drops reports into a
 - **Never loses a file** — a file is only archived after it has been delivered and verified. If the target is down, it stays in the source folder and is retried.
 - **Waits for writers to finish** — a file is picked up only once its size and modification time stop changing.
 - **Parallel transfers** with a configurable limit, include/exclude glob patterns, active-hours schedule (overnight windows supported).
+- **Comprehensive audit logging** — every transfer, configuration change, and system event is logged with WHO, WHAT, WHEN, WHERE, and RESULT for compliance (SOC 2, ISO 27001, HIPAA). Includes UI viewer, query/export, and automatic log rotation.
 - **Secure by default** — host keys are verified (trust-on-first-use with `known_hosts`, strict mode, or a pinned fingerprint); passwords live in the macOS Keychain / Windows Credential Manager / Secret Service instead of `config.json`; private-key login supported.
-- **Desktop app** (Fyne) with live dashboard, progress bars, transfer history, settings with *Test connection*, log viewer and a tray icon. Settings apply live — no restart.
+- **Desktop app** (Fyne) with live dashboard, progress bars, transfer history, **audit log viewer**, settings with *Test connection*, log viewer and a tray icon. Settings apply live — no restart.
 - **Headless mode** for servers (`-headless`) and one-shot mode for cron/Task Scheduler (`-once`).
 
 ## How it works
@@ -89,6 +90,41 @@ The config file is `./config.json` if it exists, otherwise the per-user config f
 | `historyFile`, `historyLimit` | `history.json`, `1000` | Transfer journal shown in the History tab. |
 
 Config files from **SFTP Watchdog** (this project's previous name) load as-is; legacy keys are migrated on the next save.
+
+### Audit Logging
+
+SFTP Relay includes comprehensive audit logging for compliance and security. Every file transfer, configuration change, and system event is logged with complete context (WHO, WHAT, WHEN, WHERE, RESULT).
+
+Add to your `config.json`:
+
+```json
+{
+  "auditLog": {
+    "enabled": true,
+    "logFile": "logs/audit.log",
+    "retentionDays": 90,
+    "logTransfers": true,
+    "logConnections": true,
+    "logConfigChanges": true
+  }
+}
+```
+
+**View audit logs:**
+- In the GUI: click the **Audit** tab
+- From terminal: `cat logs/audit.log | jq .`
+- Programmatically: see [`docs/AUDIT_LOGGING.md`](docs/AUDIT_LOGGING.md)
+
+**Features:**
+- WHO, WHAT, WHEN, WHERE tracking with millisecond precision
+- SHA-256 checksums for file integrity verification
+- Filter by event type, status, time range, filename
+- Export to JSON for analysis or compliance reports
+- Automatic log rotation with optional gzip compression
+- Secure: 0600 permissions, no passwords logged
+- Compliance-ready: SOC 2, ISO 27001, HIPAA, PCI DSS
+
+See the [Audit Logging Guide](docs/AUDIT_LOGGING.md) for complete details.
 
 ### Passwords and keys
 

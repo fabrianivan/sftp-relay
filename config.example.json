@@ -38,6 +38,14 @@
   "logRetentionDays": 14,
   "historyFile": "history.json",
   "historyLimit": 1000,
+  "auditLog": {
+    "enabled": true,
+    "logFile": "logs/audit.log",
+    "retentionDays": 90,
+    "logTransfers": true,
+    "logConnections": true,
+    "logConfigChanges": true
+  },
   "activeSchedule": {
     "enabled": false,
     "start": "06:00",

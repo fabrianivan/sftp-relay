@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/fabrianivan/sftp-relay/internal/audit"
 	"github.com/fabrianivan/sftp-relay/internal/config"
 	"github.com/fabrianivan/sftp-relay/internal/hostkey"
 	"github.com/fabrianivan/sftp-relay/internal/logging"
@@ -188,6 +189,7 @@ type Controller struct {
 	Path   string
 	Store  secrets.Store
 	Log    *logging.Logger
+	Audit  *audit.Logger
 	Engine *relay.Engine
 
 	mu  sync.Mutex
@@ -195,8 +197,8 @@ type Controller struct {
 }
 
 // NewController wraps an engine and its configuration.
-func NewController(cfgPath string, cfg *config.Config, store secrets.Store, log *logging.Logger, eng *relay.Engine) *Controller {
-	return &Controller{Path: cfgPath, Store: store, Log: log, Engine: eng, cfg: cfg}
+func NewController(cfgPath string, cfg *config.Config, store secrets.Store, log *logging.Logger, auditLog *audit.Logger, eng *relay.Engine) *Controller {
+	return &Controller{Path: cfgPath, Store: store, Log: log, Audit: auditLog, Engine: eng, cfg: cfg}
 }
 
 // Config returns a copy of the current configuration.
@@ -216,6 +218,11 @@ func (c *Controller) Apply(cfg *config.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+
+	// Track config changes for audit log
+	oldCfg := c.Config()
+	changes := detectConfigChanges(oldCfg, cfg)
+
 	if err := config.Save(c.Path, cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -223,7 +230,36 @@ func (c *Controller) Apply(cfg *config.Config) error {
 	c.cfg = cfg
 	c.mu.Unlock()
 	c.Engine.Reconfigure(Runtime(c.Path, cfg, c.Store, c.Log))
+
+	// Log config changes to audit log
+	if c.Audit != nil && cfg.AuditConfigChangesEnabled() && len(changes) > 0 {
+		_ = c.Audit.ConfigChanged(context.Background(), changes)
+	}
+
 	return nil
+}
+
+// detectConfigChanges returns a map of what changed between two configs.
+func detectConfigChanges(old, new *config.Config) map[string]interface{} {
+	changes := make(map[string]interface{})
+
+	if old.Source.Host != new.Source.Host {
+		changes["source.host"] = map[string]string{"from": old.Source.Host, "to": new.Source.Host}
+	}
+	if old.Target.Host != new.Target.Host {
+		changes["target.host"] = map[string]string{"from": old.Target.Host, "to": new.Target.Host}
+	}
+	if old.PollInterval != new.PollInterval {
+		changes["pollInterval"] = map[string]int{"from": old.PollInterval, "to": new.PollInterval}
+	}
+	if old.MaxParallel != new.MaxParallel {
+		changes["maxParallel"] = map[string]int{"from": old.MaxParallel, "to": new.MaxParallel}
+	}
+	if old.StableSeconds != new.StableSeconds {
+		changes["stableSeconds"] = map[string]int{"from": old.StableSeconds, "to": new.StableSeconds}
+	}
+
+	return changes
 }
 
 // SavePassword stores a password in the system keychain.

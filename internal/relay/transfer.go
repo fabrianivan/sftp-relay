@@ -66,6 +66,32 @@ func (e *Engine) process(ctx context.Context, st *state, fi os.FileInfo) outcome
 
 	e.publish(Event{Kind: TransferStarted, File: name, Size: fi.Size()})
 
+	// Audit: Log transfer started
+	if e.audit != nil && cfg.AuditTransfersEnabled() {
+		auditSrc := &AuditEndpoint{
+			Host:      cfg.Source.Host,
+			Port:      cfg.Source.Port,
+			Username:  cfg.Source.Username,
+			Directory: cfg.Source.Directory,
+		}
+		var auditTgt *AuditEndpoint
+		if st.Target != nil {
+			auditTgt = &AuditEndpoint{
+				Host:      cfg.Target.Host,
+				Port:      cfg.Target.Port,
+				Username:  cfg.Target.Username,
+				Directory: cfg.Target.Directory,
+			}
+		}
+		auditFile := &AuditFile{
+			Name:       name,
+			Size:       fi.Size(),
+			ModTime:    fi.ModTime(),
+			SourcePath: srcPath,
+		}
+		_ = e.audit.TransferStarted(ctx, auditSrc, auditTgt, auditFile)
+	}
+
 	var d delivery
 	if st.Target != nil {
 		if p, ok := e.hist.PendingFor(key); ok {
@@ -114,6 +140,49 @@ func (e *Engine) process(ctx context.Context, st *state, fi os.FileInfo) outcome
 	if err := e.hist.Add(rec); err != nil {
 		e.log.Warnf("Could not save history: %v", err)
 	}
+
+	// Audit: Log successful transfer
+	if e.audit != nil && cfg.AuditTransfersEnabled() {
+		auditSrc := &AuditEndpoint{
+			Host:      cfg.Source.Host,
+			Port:      cfg.Source.Port,
+			Username:  cfg.Source.Username,
+			Directory: cfg.Source.Directory,
+		}
+		var auditTgt *AuditEndpoint
+		if st.Target != nil {
+			auditTgt = &AuditEndpoint{
+				Host:      cfg.Target.Host,
+				Port:      cfg.Target.Port,
+				Username:  cfg.Target.Username,
+				Directory: cfg.Target.Directory,
+			}
+		}
+		auditFile := &AuditFile{
+			Name:        name,
+			Size:        fi.Size(),
+			ModTime:     fi.ModTime(),
+			SHA256:      d.sha,
+			SourcePath:  srcPath,
+			TargetPath:  d.target,
+			ArchivePath: archived,
+		}
+		_ = e.audit.TransferCompleted(ctx, auditSrc, auditTgt, auditFile, elapsed)
+
+		// Also log the archive operation
+		if archived != "" {
+			archiveFile := &AuditFile{
+				Name:        name,
+				Size:        fi.Size(),
+				ModTime:     fi.ModTime(),
+				SHA256:      d.sha,
+				SourcePath:  srcPath,
+				ArchivePath: archived,
+			}
+			_ = e.audit.FileArchived(ctx, auditSrc, archiveFile)
+		}
+	}
+
 	e.count(out, fi.Size())
 	e.publish(Event{Kind: TransferDone, File: name, Size: fi.Size(), Transferred: fi.Size(), Message: string(rec.Status)})
 	return out
@@ -128,6 +197,36 @@ func (e *Engine) fail(rec history.Record, start time.Time, err error, target str
 	if herr := e.hist.Add(rec); herr != nil {
 		e.log.Warnf("Could not save history: %v", herr)
 	}
+
+	// Audit: Log failed transfer
+	st := e.state()
+	cfg := st.Config
+	if e.audit != nil && cfg.AuditTransfersEnabled() {
+		auditSrc := &AuditEndpoint{
+			Host:      cfg.Source.Host,
+			Port:      cfg.Source.Port,
+			Username:  cfg.Source.Username,
+			Directory: cfg.Source.Directory,
+		}
+		var auditTgt *AuditEndpoint
+		if st.Target != nil {
+			auditTgt = &AuditEndpoint{
+				Host:      cfg.Target.Host,
+				Port:      cfg.Target.Port,
+				Username:  cfg.Target.Username,
+				Directory: cfg.Target.Directory,
+			}
+		}
+		auditFile := &AuditFile{
+			Name:       rec.File,
+			Size:       rec.Size,
+			SourcePath: path.Join(cfg.Source.Directory, rec.File),
+			TargetPath: target,
+		}
+		duration := time.Duration(rec.DurationMS) * time.Millisecond
+		_ = e.audit.TransferFailed(context.Background(), auditSrc, auditTgt, auditFile, err, duration)
+	}
+
 	e.count(outFailed, 0)
 	e.publish(Event{Kind: TransferFailed, File: rec.File, Message: err.Error(), Err: true})
 	return outFailed

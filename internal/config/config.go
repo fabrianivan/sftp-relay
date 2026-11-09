@@ -84,9 +84,22 @@ type Config struct {
 	HistoryFile      string `json:"historyFile,omitempty"`
 	HistoryLimit     int    `json:"historyLimit,omitempty"`
 
+	// Audit logging.
+	AuditLog AuditLog `json:"auditLog"`
+
 	ActiveSchedule    Schedule `json:"activeSchedule"`
 	EnableInitialSync *bool    `json:"enableInitialSync,omitempty"`
 	Notifications     *bool    `json:"notifications,omitempty"`
+}
+
+// AuditLog configures comprehensive audit logging.
+type AuditLog struct {
+	Enabled          *bool  `json:"enabled,omitempty"`          // nil = default true
+	LogFile          string `json:"logFile,omitempty"`          // default "logs/audit.log"
+	RetentionDays    int    `json:"retentionDays,omitempty"`    // 0 = keep forever
+	LogTransfers     *bool  `json:"logTransfers,omitempty"`     // nil = true
+	LogConnections   *bool  `json:"logConnections,omitempty"`   // nil = true
+	LogConfigChanges *bool  `json:"logConfigChanges,omitempty"` // nil = true
 }
 
 // DefaultExclude skips hidden files and common in-progress upload names.
@@ -224,6 +237,28 @@ func (c *Config) ApplyDefaults() {
 		v := true
 		c.Notifications = &v
 	}
+	if c.AuditLog.LogFile == "" {
+		c.AuditLog.LogFile = "logs/audit.log"
+	}
+	if c.AuditLog.RetentionDays == 0 {
+		c.AuditLog.RetentionDays = 90
+	}
+	if c.AuditLog.Enabled == nil {
+		v := true
+		c.AuditLog.Enabled = &v
+	}
+	if c.AuditLog.LogTransfers == nil {
+		v := true
+		c.AuditLog.LogTransfers = &v
+	}
+	if c.AuditLog.LogConnections == nil {
+		v := true
+		c.AuditLog.LogConnections = &v
+	}
+	if c.AuditLog.LogConfigChanges == nil {
+		v := true
+		c.AuditLog.LogConfigChanges = &v
+	}
 }
 
 func setDefault(v *int, def int) {
@@ -315,6 +350,24 @@ func (c *Config) InitialSyncEnabled() bool { return c.EnableInitialSync == nil |
 
 // NotificationsEnabled reports whether desktop notifications are shown.
 func (c *Config) NotificationsEnabled() bool { return c.Notifications == nil || *c.Notifications }
+
+// AuditLogEnabled reports whether audit logging is enabled.
+func (c *Config) AuditLogEnabled() bool { return c.AuditLog.Enabled == nil || *c.AuditLog.Enabled }
+
+// AuditTransfersEnabled reports whether transfer events are audited.
+func (c *Config) AuditTransfersEnabled() bool {
+	return c.AuditLog.LogTransfers == nil || *c.AuditLog.LogTransfers
+}
+
+// AuditConnectionsEnabled reports whether connection events are audited.
+func (c *Config) AuditConnectionsEnabled() bool {
+	return c.AuditLog.LogConnections == nil || *c.AuditLog.LogConnections
+}
+
+// AuditConfigChangesEnabled reports whether config changes are audited.
+func (c *Config) AuditConfigChangesEnabled() bool {
+	return c.AuditLog.LogConfigChanges == nil || *c.AuditLog.LogConfigChanges
+}
 
 // Poll returns the scan interval as a duration.
 func (c *Config) Poll() time.Duration { return time.Duration(c.PollInterval) * time.Second }

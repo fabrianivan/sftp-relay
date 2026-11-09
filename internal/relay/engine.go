@@ -38,6 +38,7 @@ type Options struct {
 	History  *history.Store
 	Logger   *logging.Logger
 	Notifier notifier.Notifier
+	Auditor  Auditor // Audit logger for compliance tracking (optional)
 	Now      func() time.Time
 }
 
@@ -83,6 +84,7 @@ type Engine struct {
 	log    *logging.Logger
 	hist   *history.Store
 	notify notifier.Notifier
+	audit  Auditor // Audit logger (optional)
 	now    func() time.Time
 	bus    *bus
 
@@ -126,6 +128,7 @@ func New(o Options) *Engine {
 		log:      o.Logger,
 		hist:     o.History,
 		notify:   o.Notifier,
+		audit:    o.Auditor,
 		now:      o.Now,
 		bus:      newBus(),
 		ctx:      ctx,
@@ -566,4 +569,33 @@ func retryPolicy(cfg *config.Config) sftpclient.Retry {
 		Base:     time.Duration(cfg.ReconnectInterval) * time.Second,
 		Max:      time.Minute,
 	}
+}
+
+// Auditor logs audit events for compliance and forensic investigation.
+type Auditor interface {
+	TransferStarted(ctx context.Context, source, target *AuditEndpoint, file *AuditFile) error
+	TransferCompleted(ctx context.Context, source, target *AuditEndpoint, file *AuditFile, duration time.Duration) error
+	TransferFailed(ctx context.Context, source, target *AuditEndpoint, file *AuditFile, err error, duration time.Duration) error
+	FileArchived(ctx context.Context, source *AuditEndpoint, file *AuditFile) error
+	EngineStarted(ctx context.Context, config map[string]interface{}) error
+	EngineStopped(ctx context.Context, reason string) error
+}
+
+// AuditEndpoint represents SFTP server details for audit logging.
+type AuditEndpoint struct {
+	Host      string
+	Port      int
+	Username  string
+	Directory string
+}
+
+// AuditFile represents file details for audit logging.
+type AuditFile struct {
+	Name        string
+	Size        int64
+	ModTime     time.Time
+	SHA256      string
+	SourcePath  string
+	TargetPath  string
+	ArchivePath string
 }

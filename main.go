@@ -22,6 +22,7 @@ import (
 	fyneapp "fyne.io/fyne/v2/app"
 	"golang.org/x/term"
 
+	"github.com/fabrianivan/sftp-relay/internal/audit"
 	"github.com/fabrianivan/sftp-relay/internal/config"
 	"github.com/fabrianivan/sftp-relay/internal/history"
 	"github.com/fabrianivan/sftp-relay/internal/logging"
@@ -122,6 +123,29 @@ func run() int {
 	}
 	store := secrets.Default()
 
+	// Initialize audit logger
+	var auditLog *audit.Logger
+	mode := "gui"
+	if *headless {
+		mode = "headless"
+	} else if *once || *scanCompat {
+		mode = "once"
+	}
+	if cfg.AuditLogEnabled() {
+		auditPath := config.Resolve(path, cfg.AuditLog.LogFile)
+		auditLog, err = audit.New(audit.Options{
+			LogPath:  auditPath,
+			Disabled: false,
+			Mode:     mode,
+		})
+		if err != nil {
+			log.Warnf("Failed to initialize audit log: %v", err)
+		} else {
+			defer auditLog.Close()
+			log.Infof("Audit logging enabled: %s", auditPath)
+		}
+	}
+
 	if *check {
 		return runCheck(path, cfg, store)
 	}
@@ -142,16 +166,36 @@ func run() int {
 		History:  hist,
 		Logger:   log,
 		Notifier: notify,
+		Auditor:  relay.NewAuditAdapter(auditLog),
 	})
+
+	// Log engine start to audit log
+	if auditLog != nil {
+		_ = auditLog.EngineStarted(context.Background(), map[string]interface{}{
+			"version":      version,
+			"mode":         mode,
+			"source":       cfg.Source.Host,
+			"target":       cfg.Target.Host,
+			"pollInterval": cfg.PollInterval,
+		})
+	}
 
 	switch {
 	case *once || *scanCompat:
-		return runOnce(eng, log)
+		exitCode := runOnce(eng, log)
+		if auditLog != nil {
+			_ = auditLog.EngineStopped(context.Background(), "one-time scan completed")
+		}
+		return exitCode
 	case *headless:
-		return runHeadless(eng, log)
+		exitCode := runHeadless(eng, log)
+		if auditLog != nil {
+			_ = auditLog.EngineStopped(context.Background(), "shutdown signal received")
+		}
+		return exitCode
 	}
 
-	ctl := setup.NewController(path, cfg, store, log, eng)
+	ctl := setup.NewController(path, cfg, store, log, auditLog, eng)
 	win := ui.NewWindow(gui, ctl, version, cfgErr)
 	if cfgErr == nil {
 		eng.Start()
@@ -166,6 +210,9 @@ func run() int {
 	gui.Run()
 
 	log.Infof("Shutting down")
+	if auditLog != nil {
+		_ = auditLog.EngineStopped(context.Background(), "user quit application")
+	}
 	eng.Shutdown(30 * time.Second)
 	return 0
 }

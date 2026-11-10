@@ -16,7 +16,7 @@ import (
 	"github.com/fabrianivan/sftp-relay/internal/config"
 )
 
-// auditView displays audit log events with modern card-based design.
+// auditView displays audit log events in a clean, compact list.
 type auditView struct {
 	w      *Window
 	reader *audit.Reader
@@ -27,7 +27,6 @@ type auditView struct {
 	filterStatus *widget.Select
 	searchEntry  *widget.Entry
 	refreshBtn   *widget.Button
-	exportBtn    *widget.Button
 	statsLabel   *widget.Label
 	initialized  bool
 }
@@ -46,9 +45,9 @@ func newAuditView(w *Window) *auditView {
 		v.reader = audit.NewReader(logPath)
 	}
 
-	// Search entry with modern styling
+	// Search entry
 	v.searchEntry = widget.NewEntry()
-	v.searchEntry.SetPlaceHolder("🔍 Search events, files, or details...")
+	v.searchEntry.SetPlaceHolder("Search events...")
 	v.searchEntry.OnChanged = func(string) {
 		if v.initialized {
 			v.refresh()
@@ -57,56 +56,49 @@ func newAuditView(w *Window) *auditView {
 
 	// Filter type dropdown
 	v.filterType = widget.NewSelect([]string{
-		"All Events",
+		"All",
 		"Transfers",
-		"Config Changes",
-		"Engine Events",
+		"Config",
+		"Engine",
 	}, func(string) {
 		if v.initialized {
 			v.refresh()
 		}
 	})
-	v.filterType.SetSelected("All Events")
+	v.filterType.SetSelected("All")
 
 	// Filter status dropdown
 	v.filterStatus = widget.NewSelect([]string{
-		"All Status",
+		"All",
 		"Success",
 		"Failed",
-		"In Progress",
+		"Running",
 	}, func(string) {
 		if v.initialized {
 			v.refresh()
 		}
 	})
-	v.filterStatus.SetSelected("All Status")
+	v.filterStatus.SetSelected("All")
 
-	// Modern buttons
-	v.refreshBtn = widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
+	// Refresh button
+	v.refreshBtn = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
 		v.refresh()
 	})
-	v.refreshBtn.Importance = widget.LowImportance
-
-	v.exportBtn = widget.NewButtonWithIcon("Export", theme.DocumentSaveIcon(), func() {
-		v.exportDialog()
-	})
-	v.exportBtn.Importance = widget.HighImportance
 
 	// Stats label
-	v.statsLabel = widget.NewLabel("Loading...")
+	v.statsLabel = widget.NewLabel("0 events")
 
-	// Create modern card list
+	// Create compact list
 	v.list = widget.NewList(
 		func() int { return len(v.events) },
 		func() fyne.CanvasObject {
-			return createModernEventCard()
+			return createCompactEventRow()
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id >= len(v.events) {
 				return
 			}
-			event := v.events[id]
-			updateModernEventCard(obj.(*fyne.Container), event)
+			updateCompactEventRow(obj.(*fyne.Container), v.events[id])
 		},
 	)
 
@@ -116,28 +108,10 @@ func newAuditView(w *Window) *auditView {
 
 func (v *auditView) build() fyne.CanvasObject {
 	if v.reader == nil {
-		// Modern empty state
-		emptyIcon := widget.NewIcon(theme.InfoIcon())
-		emptyTitle := widget.NewLabel("Audit Logging Disabled")
-		emptyTitle.TextStyle = fyne.TextStyle{Bold: true}
-		emptyTitle.Alignment = fyne.TextAlignCenter
-
-		emptyDesc := widget.NewLabel("Enable audit logging in Settings to track all system events,\nfile transfers, and configuration changes.")
-		emptyDesc.Alignment = fyne.TextAlignCenter
-
-		enableBtn := widget.NewButton("Open Settings", func() {
-			// TODO: Navigate to settings
-		})
-		enableBtn.Importance = widget.HighImportance
-
 		return container.NewCenter(
 			container.NewVBox(
-				emptyIcon,
-				layout.NewSpacer(),
-				emptyTitle,
-				emptyDesc,
-				layout.NewSpacer(),
-				enableBtn,
+				widget.NewLabel("Audit Logging Disabled"),
+				widget.NewLabel("Enable in Settings to track events"),
 			),
 		)
 	}
@@ -145,60 +119,44 @@ func (v *auditView) build() fyne.CanvasObject {
 	// Initial load
 	v.refresh()
 
-	// Modern header with title and description
+	// Header
 	title := widget.NewLabel("Audit Log")
 	title.TextStyle = fyne.TextStyle{Bold: true}
+	
+	subtitle := widget.NewLabel("Search and filter recorded events")
 
-	subtitle := widget.NewLabel("Track and review all system activity")
-	subtitle.TextStyle = fyne.TextStyle{Italic: true}
+	// Filter bar - horizontal compact layout
+	filterBar := container.NewHBox(
+		widget.NewLabel("Filter"),
+		v.filterType,
+		v.filterStatus,
+		layout.NewSpacer(),
+		v.refreshBtn,
+	)
 
-	header := container.NewVBox(
+	// Top section
+	topSection := container.NewVBox(
 		title,
 		subtitle,
-	)
-
-	// Modern filter bar with better layout
-	filterRow := container.NewBorder(
-		nil, nil,
-		container.NewHBox(
-			widget.NewLabel("Type:"),
-			v.filterType,
-			widget.NewLabel("Status:"),
-			v.filterStatus,
-		),
-		container.NewHBox(
-			v.refreshBtn,
-			v.exportBtn,
-		),
+		widget.NewSeparator(),
 		v.searchEntry,
+		filterBar,
+		widget.NewSeparator(),
 	)
 
-	// Stats bar with modern badges
-	statsBar := container.NewHBox(
+	// Bottom stats
+	bottomSection := container.NewVBox(
+		widget.NewSeparator(),
 		v.statsLabel,
-		layout.NewSpacer(),
 	)
 
-	// Main content with proper spacing
-	content := container.NewBorder(
-		// Top
-		container.NewVBox(
-			container.NewPadded(header),
-			widget.NewSeparator(),
-			container.NewPadded(filterRow),
-			widget.NewSeparator(),
-		),
-		// Bottom
-		container.NewVBox(
-			widget.NewSeparator(),
-			container.NewPadded(statsBar),
-		),
+	// Main layout
+	return container.NewBorder(
+		topSection,
+		bottomSection,
 		nil, nil,
-		// Center - scrollable list
 		v.list,
 	)
-
-	return content
 }
 
 func (v *auditView) refresh() {
@@ -206,9 +164,7 @@ func (v *auditView) refresh() {
 		return
 	}
 
-	filter := audit.Filter{
-		Limit: 500,
-	}
+	filter := audit.Filter{Limit: 500}
 
 	// Apply type filter
 	switch v.filterType.Selected {
@@ -219,9 +175,9 @@ func (v *auditView) refresh() {
 			audit.EventTransferFailed,
 			audit.EventFileArchived,
 		}
-	case "Config Changes":
+	case "Config":
 		filter.EventTypes = []audit.EventType{audit.EventConfigChanged}
-	case "Engine Events":
+	case "Engine":
 		filter.EventTypes = []audit.EventType{
 			audit.EventEngineStarted,
 			audit.EventEngineStopped,
@@ -234,7 +190,7 @@ func (v *auditView) refresh() {
 		filter.Status = []audit.Status{audit.StatusSuccess}
 	case "Failed":
 		filter.Status = []audit.Status{audit.StatusFailed}
-	case "In Progress":
+	case "Running":
 		filter.Status = []audit.Status{audit.StatusStarted}
 	}
 
@@ -244,60 +200,54 @@ func (v *auditView) refresh() {
 		v.w.ctl.Log.Warnf("Failed to read audit log: %v", err)
 		v.events = []audit.Event{}
 	} else {
-		// Filter by search text
-		searchText := v.searchEntry.Text
-		if searchText != "" {
+		// Filter by search
+		if search := v.searchEntry.Text; search != "" {
 			filtered := []audit.Event{}
 			for _, e := range events {
-				if matchesSearch(e, searchText) {
+				if matchesSearch(e, search) {
 					filtered = append(filtered, e)
 				}
 			}
 			events = filtered
 		}
 
-		// Reverse to show newest first
+		// Reverse - newest first
 		v.events = make([]audit.Event, len(events))
 		for i, e := range events {
 			v.events[len(events)-1-i] = e
 		}
 	}
 
-	// Calculate statistics
-	success, failed, inProgress := 0, 0, 0
+	// Update stats
+	success, failed := 0, 0
 	for _, e := range v.events {
-		switch e.Status {
-		case audit.StatusSuccess:
+		if e.Status == audit.StatusSuccess {
 			success++
-		case audit.StatusFailed:
+		} else if e.Status == audit.StatusFailed {
 			failed++
-		case audit.StatusStarted:
-			inProgress++
 		}
 	}
 
-	v.statsLabel.SetText(fmt.Sprintf("📊 %d total  •  ✅ %d success  •  ❌ %d failed  •  ⏳ %d in progress",
-		len(v.events), success, failed, inProgress))
+	v.statsLabel.SetText(fmt.Sprintf("%d events  •  %d success  •  %d failed", 
+		len(v.events), success, failed))
 	v.list.Refresh()
 }
 
 func matchesSearch(e audit.Event, search string) bool {
-	// Simple case-insensitive contains
-	searchLower := toLower(search)
-	if contains(toLower(string(e.EventType)), searchLower) {
+	s := toLower(search)
+	if contains(toLower(string(e.EventType)), s) {
 		return true
 	}
-	if contains(toLower(e.Error), searchLower) {
+	if contains(toLower(e.Error), s) {
 		return true
 	}
-	if e.File != nil && contains(toLower(e.File.Name), searchLower) {
+	if e.File != nil && contains(toLower(e.File.Name), s) {
 		return true
 	}
 	return false
 }
 
 func toLower(s string) string {
-	// Simple ASCII lowercase
 	result := make([]byte, len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -325,244 +275,124 @@ func contains(s, substr string) bool {
 	return false
 }
 
-func (v *auditView) exportDialog() {
-	title := widget.NewLabel("Export Audit Log")
-	title.TextStyle = fyne.TextStyle{Bold: true}
+// createCompactEventRow creates a single-line compact row
+func createCompactEventRow() fyne.CanvasObject {
+	// Status indicator (small colored bar on left)
+	statusBar := canvas.NewRectangle(color.NRGBA{R: 76, G: 175, B: 80, A: 255})
+	statusBar.SetMinSize(fyne.NewSize(3, 32))
 
-	content := container.NewVBox(
-		title,
-		widget.NewLabel(""),
-		widget.NewLabel(fmt.Sprintf("Ready to export %d events to JSON", len(v.events))),
-		widget.NewLabel(""),
-		widget.NewLabel("This feature will be available in a future update."),
-	)
+	// Icon
+	icon := widget.NewIcon(theme.DocumentIcon())
 
-	dialog := widget.NewModalPopUp(content, v.w.win.Canvas())
+	// Time
+	timeLabel := widget.NewLabel("00:00:00")
+	timeLabel.TextStyle = fyne.TextStyle{Monospace: true}
 
-	okBtn := widget.NewButton("Close", func() {
-		dialog.Hide()
-	})
-	okBtn.Importance = widget.HighImportance
+	// Event name
+	eventLabel := widget.NewLabel("")
+	eventLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	content.Add(widget.NewLabel(""))
-	content.Add(okBtn)
+	// Details
+	detailsLabel := widget.NewLabel("")
 
-	dialog.Resize(fyne.NewSize(450, 250))
-	dialog.Show()
-}
-
-// createModernEventCard creates a modern card with gradient, shadows, and icons
-func createModernEventCard() fyne.CanvasObject {
-	// Card background
-	cardBg := canvas.NewRectangle(color.NRGBA{R: 30, G: 33, B: 45, A: 255})
-	cardBg.CornerRadius = 8
-
-	// Status indicator (colored dot)
-	statusDot := canvas.NewCircle(color.NRGBA{R: 76, G: 175, B: 80, A: 255})
-	statusDot.StrokeColor = color.NRGBA{R: 76, G: 175, B: 80, A: 100}
-	statusDot.StrokeWidth = 2
-	statusDot.Resize(fyne.NewSize(12, 12))
-
-	// Event icon
-	eventIcon := widget.NewIcon(theme.DocumentIcon())
-
-	// Status badge background
-	badgeBg := canvas.NewRectangle(color.NRGBA{R: 76, G: 175, B: 80, A: 40})
-	badgeBg.CornerRadius = 12
-
-	// Status badge text
+	// Status badge
 	statusBadge := widget.NewLabel("SUCCESS")
 	statusBadge.TextStyle = fyne.TextStyle{Bold: true}
-	statusBadge.Alignment = fyne.TextAlignCenter
 
-	// Badge container
-	badge := container.NewStack(
-		badgeBg,
-		container.NewPadded(statusBadge),
-	)
-	badge.Resize(fyne.NewSize(90, 24))
-
-	// Event type and time
-	eventTitle := widget.NewLabel("")
-	eventTitle.TextStyle = fyne.TextStyle{Bold: true}
-
-	timestamp := widget.NewLabel("")
-	timestamp.TextStyle = fyne.TextStyle{Italic: true}
-
-	// Details text
-	detailsLabel := widget.NewLabel("")
-	detailsLabel.Wrapping = fyne.TextWrapWord
-
-	// File/size info
-	fileInfo := widget.NewLabel("")
-
-	// Duration badge
-	durationLabel := widget.NewLabel("")
-	durationLabel.TextStyle = fyne.TextStyle{Monospace: true}
-
-	// Actor info
-	actorLabel := widget.NewLabel("")
-	actorLabel.TextStyle = fyne.TextStyle{Italic: true}
-
-	// Layout: Icon | Content | Badge
-	leftSection := container.NewVBox(
-		container.NewHBox(eventIcon, statusDot),
-	)
-
-	middleSection := container.NewVBox(
-		container.NewHBox(eventTitle, layout.NewSpacer(), timestamp),
-		detailsLabel,
-		fileInfo,
-		container.NewHBox(actorLabel, layout.NewSpacer(), durationLabel),
-	)
-
-	rightSection := container.NewVBox(
-		badge,
-	)
-
-	content := container.NewBorder(
+	// Compact horizontal layout: [Bar][Icon] Time Event Details [Status]
+	row := container.NewBorder(
 		nil, nil,
-		container.NewPadded(leftSection),
-		container.NewPadded(rightSection),
-		container.NewPadded(middleSection),
+		container.NewHBox(statusBar, icon, timeLabel),
+		statusBadge,
+		container.NewHBox(eventLabel, widget.NewLabel("•"), detailsLabel),
 	)
 
-	// Stack background and content
-	card := container.NewStack(
-		cardBg,
-		content,
-	)
-
-	// Add spacing between cards
-	return container.NewPadded(card)
+	return container.NewPadded(row)
 }
 
-func updateModernEventCard(cardContainer *fyne.Container, e audit.Event) {
-	// Get card stack
-	card := cardContainer.Objects[0].(*fyne.Container)
+func updateCompactEventRow(row *fyne.Container, e audit.Event) {
+	// Get the inner border container
+	innerRow := row.Objects[0].(*fyne.Container)
+	
+	// Left section
+	leftBox := innerRow.Objects[0].(*fyne.Container)
+	statusBar := leftBox.Objects[0].(*canvas.Rectangle)
+	icon := leftBox.Objects[1].(*widget.Icon)
+	timeLabel := leftBox.Objects[2].(*widget.Label)
+	
+	// Center section
+	centerBox := innerRow.Objects[1].(*fyne.Container)
+	eventLabel := centerBox.Objects[0].(*widget.Label)
+	detailsLabel := centerBox.Objects[2].(*widget.Label)
+	
+	// Right section
+	statusBadge := innerRow.Objects[2].(*widget.Label)
 
-	// Get background (first in stack)
-	cardBg := card.Objects[0].(*canvas.Rectangle)
-
-	// Get content border
-	content := card.Objects[1].(*fyne.Container)
-
-	// Get sections
-	leftPadded := content.Objects[0].(*fyne.Container)
-	leftSection := leftPadded.Objects[0].(*fyne.Container)
-	leftHBox := leftSection.Objects[0].(*fyne.Container)
-	eventIcon := leftHBox.Objects[0].(*widget.Icon)
-	statusDot := leftHBox.Objects[1].(*canvas.Circle)
-
-	middlePadded := content.Objects[1].(*fyne.Container)
-	middleSection := middlePadded.Objects[0].(*fyne.Container)
-
-	titleRow := middleSection.Objects[0].(*fyne.Container)
-	eventTitle := titleRow.Objects[0].(*widget.Label)
-	timestamp := titleRow.Objects[2].(*widget.Label)
-
-	detailsLabel := middleSection.Objects[1].(*widget.Label)
-	fileInfo := middleSection.Objects[2].(*widget.Label)
-
-	bottomRow := middleSection.Objects[3].(*fyne.Container)
-	actorLabel := bottomRow.Objects[0].(*widget.Label)
-	durationLabel := bottomRow.Objects[2].(*widget.Label)
-
-	rightPadded := content.Objects[2].(*fyne.Container)
-	rightSection := rightPadded.Objects[0].(*fyne.Container)
-	badge := rightSection.Objects[0].(*fyne.Container)
-	badgeBg := badge.Objects[0].(*canvas.Rectangle)
-	badgePadded := badge.Objects[1].(*fyne.Container)
-	statusBadge := badgePadded.Objects[0].(*widget.Label)
-
-	// Update status color and badge
+	// Update colors and status
 	var statusColor color.Color
 	var statusText string
-
+	
 	switch e.Status {
 	case audit.StatusSuccess:
-		statusColor = color.NRGBA{R: 76, G: 175, B: 80, A: 255} // Green
-		badgeBg.FillColor = color.NRGBA{R: 76, G: 175, B: 80, A: 40}
-		statusText = "SUCCESS"
+		statusColor = color.NRGBA{R: 76, G: 175, B: 80, A: 255}
+		statusText = "✓ SUCCESS"
 	case audit.StatusFailed:
-		statusColor = color.NRGBA{R: 244, G: 67, B: 54, A: 255} // Red
-		badgeBg.FillColor = color.NRGBA{R: 244, G: 67, B: 54, A: 40}
-		statusText = "FAILED"
+		statusColor = color.NRGBA{R: 244, G: 67, B: 54, A: 255}
+		statusText = "✗ FAILED"
 	case audit.StatusStarted:
-		statusColor = color.NRGBA{R: 33, G: 150, B: 243, A: 255} // Blue
-		badgeBg.FillColor = color.NRGBA{R: 33, G: 150, B: 243, A: 40}
-		statusText = "IN PROGRESS"
+		statusColor = color.NRGBA{R: 33, G: 150, B: 243, A: 255}
+		statusText = "⟳ RUNNING"
 	default:
-		statusColor = color.NRGBA{R: 158, G: 158, B: 158, A: 255} // Gray
-		badgeBg.FillColor = color.NRGBA{R: 158, G: 158, B: 158, A: 40}
+		statusColor = color.NRGBA{R: 158, G: 158, B: 158, A: 255}
 		statusText = "UNKNOWN"
 	}
-
-	statusDot.FillColor = statusColor
-	statusDot.StrokeColor = statusColor
+	
+	statusBar.FillColor = statusColor
+	statusBar.Refresh()
 	statusBadge.SetText(statusText)
-	badgeBg.Refresh()
 
-	// Update icon based on event type
+	// Update icon
 	switch e.EventType {
 	case audit.EventTransferStarted, audit.EventTransferCompleted, audit.EventTransferFailed:
-		eventIcon.SetResource(theme.MailSendIcon())
+		icon.SetResource(theme.MailSendIcon())
 	case audit.EventConfigChanged:
-		eventIcon.SetResource(theme.SettingsIcon())
+		icon.SetResource(theme.SettingsIcon())
 	case audit.EventEngineStarted, audit.EventEngineStopped:
-		eventIcon.SetResource(theme.ComputerIcon())
+		icon.SetResource(theme.ComputerIcon())
 	case audit.EventFileArchived:
-		eventIcon.SetResource(theme.FileIcon())
+		icon.SetResource(theme.FileIcon())
 	default:
-		eventIcon.SetResource(theme.DocumentIcon())
+		icon.SetResource(theme.DocumentIcon())
 	}
 
-	// Update title
-	eventTitle.SetText(string(e.EventType))
+	// Update time
+	timeLabel.SetText(e.Timestamp.Local().Format("15:04:05"))
 
-	// Update timestamp
-	timestamp.SetText(e.Timestamp.Local().Format("Jan 02, 15:04:05"))
+	// Update event name
+	eventLabel.SetText(string(e.EventType))
 
-	// Update details
+	// Update details - compact single line
+	var details string
 	if e.Error != "" {
-		detailsLabel.SetText(fmt.Sprintf("❌ Error: %s", e.Error))
-	} else if e.Source != nil && e.Target != nil {
-		detailsLabel.SetText(fmt.Sprintf("📤 %s@%s → 📥 %s@%s",
-			e.Source.Username, e.Source.Host,
-			e.Target.Username, e.Target.Host))
-	} else if len(e.Details) > 0 {
-		for k, v := range e.Details {
-			detailsLabel.SetText(fmt.Sprintf("ℹ️ %s: %v", k, v))
-			break
+		details = e.Error
+	} else if e.File != nil {
+		details = fmt.Sprintf("%s (%s)", e.File.Name, humanBytes(e.File.Size))
+		if e.Duration != nil {
+			details += fmt.Sprintf(" in %s", e.Duration.Round(10*time.Millisecond))
 		}
+	} else if e.Source != nil && e.Target != nil {
+		details = fmt.Sprintf("%s@%s → %s@%s", 
+			e.Source.Username, e.Source.Host,
+			e.Target.Username, e.Target.Host)
 	} else {
-		detailsLabel.SetText("")
+		details = fmt.Sprintf("%s@%s", e.Actor.User, e.Actor.Hostname)
 	}
-
-	// Update file info
-	if e.File != nil {
-		fileInfo.SetText(fmt.Sprintf("📄 %s • %s", e.File.Name, humanBytes(e.File.Size)))
-	} else {
-		fileInfo.SetText("")
+	
+	// Truncate if too long
+	if len(details) > 80 {
+		details = details[:77] + "..."
 	}
-
-	// Update actor
-	actorLabel.SetText(fmt.Sprintf("👤 %s@%s", e.Actor.User, e.Actor.Hostname))
-
-	// Update duration
-	if e.Duration != nil {
-		durationLabel.SetText(fmt.Sprintf("⏱️ %s", e.Duration.Round(time.Millisecond)))
-	} else {
-		durationLabel.SetText("")
-	}
-
-	// Subtle card hover effect (change background slightly)
-	if e.Status == audit.StatusFailed {
-		cardBg.FillColor = color.NRGBA{R: 35, G: 30, B: 30, A: 255}
-	} else {
-		cardBg.FillColor = color.NRGBA{R: 30, G: 33, B: 45, A: 255}
-	}
-	cardBg.Refresh()
+	detailsLabel.SetText(details)
 }
 
 func humanBytes(n int64) string {

@@ -12,10 +12,52 @@
     "directory": "/inbox"
   },
   "backupDirectory": "/outbox/archive",
+  "localBackup": {
+    "enabled": false,
+    "directory": "",
+    "afterUpload": "keep",
+    "archiveFolder": "archive"
+  },
   "pollInterval": 5,
   "stableSeconds": 3,
-  "maxParallel": 2,
+  "maxParallel": 5,
+  "verifyChecksum": true,
+  "include": [
+    "*"
+  ],
+  "exclude": [
+    ".*",
+    "~*",
+    "*.tmp",
+    "*.part",
+    "*.partial",
+    "*.filepart",
+    "*.crdownload"
+  ],
+  "reconnectInterval": 5,
+  "reconnectRetries": 3,
+  "keepAliveDuration": 30,
+  "maxIdleScans": 0,
+  "strictHostKeyChecking": false,
+  "knownHostsFile": "demo-data/known_hosts",
   "logFile": "demo-data/logs/sftp-relay.log",
+  "logRetentionDays": 14,
   "historyFile": "demo-data/history.json",
-  "knownHostsFile": "demo-data/known_hosts"
+  "historyLimit": 1000,
+  "auditLog": {
+    "enabled": true,
+    "logFile": "logs/audit.log",
+    "retentionDays": 90,
+    "logTransfers": true,
+    "logConnections": true,
+    "logConfigChanges": true
+  },
+  "activeSchedule": {
+    "enabled": false,
+    "start": "00:00",
+    "end": "23:59",
+    "timezone": "Local"
+  },
+  "enableInitialSync": true,
+  "notifications": true
 }

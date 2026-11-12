@@ -56,11 +56,45 @@ type Schedule struct {
 	Timezone string `json:"timezone"` // IANA name or "Local"
 }
 
+// LocalBackup uploads files from a folder on this computer to the target
+// server. It works next to the source server, or on its own when no source
+// server is configured.
+type LocalBackup struct {
+	Enabled bool `json:"enabled"`
+
+	// Directory is the folder to back up: an absolute path, top level only.
+	Directory string `json:"directory"`
+
+	// TargetDirectory is where the files go on the target server.
+	// Empty means the target server's own directory.
+	TargetDirectory string `json:"targetDirectory,omitempty"`
+
+	// AfterUpload is "keep" (the file stays where it is and is uploaded
+	// again whenever it changes) or "archive" (the file is moved into
+	// ArchiveFolder once it has been delivered and verified).
+	AfterUpload string `json:"afterUpload,omitempty"`
+
+	// ArchiveFolder is a subfolder of Directory, used when AfterUpload is "archive".
+	ArchiveFolder string `json:"archiveFolder,omitempty"`
+}
+
+// Values for LocalBackup.AfterUpload.
+const (
+	LocalKeep    = "keep"
+	LocalArchive = "archive"
+)
+
+// Keep reports whether backed-up files stay where they are.
+func (l LocalBackup) Keep() bool { return l.AfterUpload != LocalArchive }
+
 // Config is the top-level application configuration.
 type Config struct {
 	Source          Endpoint `json:"sourceSFTP"`
 	Target          Endpoint `json:"targetSFTP"`
 	BackupDirectory string   `json:"backupDirectory"`
+
+	// LocalBackup adds a folder on this computer as a second place to pick files up from.
+	LocalBackup LocalBackup `json:"localBackup"`
 
 	// Transfer rules.
 	PollInterval   int      `json:"pollInterval"`             // seconds between scans
@@ -188,6 +222,14 @@ func (c *Config) ApplyDefaults() {
 			e.Port = 22
 		}
 	}
+	c.LocalBackup.Directory = strings.TrimSpace(c.LocalBackup.Directory)
+	c.LocalBackup.TargetDirectory = strings.TrimSpace(c.LocalBackup.TargetDirectory)
+	if c.LocalBackup.AfterUpload == "" {
+		c.LocalBackup.AfterUpload = LocalKeep
+	}
+	if strings.TrimSpace(c.LocalBackup.ArchiveFolder) == "" {
+		c.LocalBackup.ArchiveFolder = "archive"
+	}
 	setDefault(&c.PollInterval, 30)
 	if c.StableSeconds == 0 {
 		c.StableSeconds = 10
@@ -272,14 +314,38 @@ func (c *Config) Validate() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 
-	if !c.Source.Enabled() {
-		add("source host is required")
+	// Files come from a source server, a local folder, or both.
+	local := c.LocalBackup.Enabled
+	if !c.Source.Enabled() && !local {
+		add("source host is required (or turn on local backup)")
 	}
-	if strings.TrimSpace(c.Source.Directory) == "" {
-		add("source directory is required")
+	if c.Source.Enabled() || !local {
+		if strings.TrimSpace(c.Source.Directory) == "" {
+			add("source directory is required")
+		}
+		if strings.TrimSpace(c.BackupDirectory) == "" {
+			add("backup directory is required (processed files are archived there)")
+		}
 	}
-	if strings.TrimSpace(c.BackupDirectory) == "" {
-		add("backup directory is required (processed files are archived there)")
+	if local {
+		switch dir := c.LocalBackup.Directory; {
+		case strings.TrimSpace(dir) == "":
+			add("local backup folder is required")
+		case !filepath.IsAbs(dir):
+			add("local backup folder must be a full path, e.g. /Users/me/Exports")
+		}
+		if !c.Target.Enabled() {
+			add("local backup needs a target server to upload to")
+		}
+		switch c.LocalBackup.AfterUpload {
+		case "", LocalKeep:
+		case LocalArchive:
+			if _, err := c.LocalArchiveFolder(); err != nil {
+				add("%v", err)
+			}
+		default:
+			add("local backup: afterUpload must be %q or %q", LocalKeep, LocalArchive)
+		}
 	}
 	for name, e := range map[string]Endpoint{"source": c.Source, "target": c.Target} {
 		if !e.Enabled() {
@@ -340,6 +406,30 @@ func (c *Config) Matches(name string) bool {
 		return false
 	}
 	return match(c.Include) && !match(c.Exclude)
+}
+
+// LocalBackupActive reports whether a local folder is backed up to the target.
+func (c *Config) LocalBackupActive() bool {
+	return c.LocalBackup.Enabled && c.LocalBackup.Directory != "" && c.Target.Enabled()
+}
+
+// LocalTargetDir is the folder on the target server that receives local backups.
+func (c *Config) LocalTargetDir() string {
+	if d := strings.TrimSpace(c.LocalBackup.TargetDirectory); d != "" {
+		return d
+	}
+	return c.Target.Directory
+}
+
+// LocalArchiveFolder returns the archive subfolder of the local backup folder
+// in slash form (e.g. "archive"). It must stay inside the backup folder.
+func (c *Config) LocalArchiveFolder() (string, error) {
+	raw := strings.TrimSpace(c.LocalBackup.ArchiveFolder)
+	sub := path.Clean(filepath.ToSlash(raw))
+	if raw == "" || filepath.IsAbs(raw) || path.IsAbs(sub) || sub == "." || sub == ".." || strings.HasPrefix(sub, "../") {
+		return "", fmt.Errorf("local archive folder must be the name of a subfolder inside the backup folder, got %q", raw)
+	}
+	return sub, nil
 }
 
 // VerifyChecksumEnabled reports whether uploads are checksum-verified.

@@ -167,3 +167,54 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("absolute path changed: %s", got)
 	}
 }
+
+func TestLocalBackupValidation(t *testing.T) {
+	dir := t.TempDir() // an absolute path on every platform
+
+	// A local folder alone is a complete setup: no source server needed.
+	cfg := &Config{
+		Target:      Endpoint{Host: "t", Username: "u", Directory: "/in"},
+		LocalBackup: LocalBackup{Enabled: true, Directory: dir},
+	}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("local-only config should be valid: %v", err)
+	}
+	if !cfg.LocalBackup.Keep() || !cfg.LocalBackupActive() || cfg.LocalTargetDir() != "/in" {
+		t.Fatalf("defaults: %+v", cfg.LocalBackup)
+	}
+	cfg.LocalBackup.TargetDirectory = "/in/laptop"
+	if cfg.LocalTargetDir() != "/in/laptop" {
+		t.Fatal("target override ignored")
+	}
+
+	bad := *cfg
+	bad.Target = Endpoint{}
+	bad.LocalBackup = LocalBackup{Enabled: true, Directory: "relative/path", AfterUpload: LocalArchive, ArchiveFolder: "../outside"}
+	err := bad.Validate()
+	if err == nil {
+		t.Fatal("expected errors")
+	}
+	for _, want := range []string{"full path", "needs a target", "subfolder inside"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in:\n%v", want, err)
+		}
+	}
+
+	// Without a source server and without local backup there is nothing to do.
+	none := &Config{Target: Endpoint{Host: "t", Username: "u", Directory: "/in"}}
+	none.ApplyDefaults()
+	if err := none.Validate(); err == nil || !strings.Contains(err.Error(), "source host is required") {
+		t.Fatalf("got %v", err)
+	}
+
+	archive := *cfg
+	archive.LocalBackup.AfterUpload = LocalArchive
+	archive.LocalBackup.ArchiveFolder = "done/2026"
+	if sub, err := archive.LocalArchiveFolder(); err != nil || sub != "done/2026" {
+		t.Fatalf("archive folder = %q, %v", sub, err)
+	}
+	if err := archive.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

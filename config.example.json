@@ -12,6 +12,12 @@
     "directory": "/inbox"
   },
   "backupDirectory": "/outbox/archive",
+  "localBackup": {
+    "enabled": false,
+    "directory": "",
+    "afterUpload": "keep",
+    "archiveFolder": "archive"
+  },
   "pollInterval": 30,
   "stableSeconds": 10,
   "maxParallel": 2,

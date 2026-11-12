@@ -22,6 +22,7 @@ const (
 type Event struct {
 	Kind        EventKind
 	Time        time.Time
+	Feed        string // FeedSource or FeedLocal, for transfer events
 	File        string
 	Size        int64
 	Transferred int64

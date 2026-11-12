@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ type endpointForm struct {
 	host, port, user, pass *widget.Entry
 	key, dir, fingerprint  *widget.Entry
 	passHint               *widget.Label
-	card                   *widget.Card
+	card                   fyne.CanvasObject
 }
 
 type settingsView struct {
@@ -32,6 +33,13 @@ type settingsView struct {
 	content fyne.CanvasObject
 
 	src, dst *endpointForm
+
+	localOn                             *widget.Check
+	localDir, localTarget, localArchive *widget.Entry
+	localMode                           *widget.RadioGroup
+
+	tabs    *segmented
+	tabBody *fyne.Container
 
 	backup, include, exclude, stable, parallel     *widget.Entry
 	verify                                         *widget.Check
@@ -42,49 +50,67 @@ type settingsView struct {
 	schedStart, schedEnd, schedTZ                  *widget.Entry
 }
 
+// What happens to a local file once it is on the target.
+const (
+	localKeepLabel    = "Keep it where it is, and upload it again whenever it changes"
+	localArchiveLabel = "Move it to the archive subfolder named below"
+)
+
+// settingsCard is one tab of the settings screen: a heading, the fields
+// (which scroll when the window is short) and an optional footer of actions.
+func settingsCard(title, description string, fields, footer fyne.CanvasObject) fyne.CanvasObject {
+	head := vstack(12, vstack(5, sectionTitle(title), subtitle(description)), hairline())
+	var foot fyne.CanvasObject
+	if footer != nil {
+		foot = vstack(12, hairline(), footer)
+	}
+	body := container.NewVScroll(pad(6, 6, 0, 4, fields))
+	return pad(gap, 0, 0, 0, panel(container.NewBorder(head, foot, nil, nil, body)))
+}
+
 func newSettingsView(w *Window) *settingsView {
 	s := &settingsView{w: w}
-	s.src = s.endpointForm(setup.Source, "📥 Source Server (Watched Folder)", "The SFTP server and directory monitored for new incoming files.")
-	s.dst = s.endpointForm(setup.Target, "📤 Target Server (Destination)", "Where files are delivered. Leave host empty to enable archive-only mode.")
+	s.src = s.endpointForm(setup.Source, "Source server", "The SFTP server and folder that are watched for new files. Leave the host empty to only back up a local folder.")
+	s.dst = s.endpointForm(setup.Target, "Target server", "Where files are delivered. Leave the host empty to only archive files.")
 
 	s.backup = widget.NewEntry()
 	s.include = widget.NewEntry()
-	s.include.SetPlaceHolder("* (matches all files)")
+	s.include.SetPlaceHolder("* (all files)")
 	s.exclude = widget.NewEntry()
 	s.exclude.SetPlaceHolder("*.tmp, .DS_Store (comma-separated)")
 	s.stable = widget.NewEntry()
 	s.parallel = widget.NewEntry()
 	s.verify = widget.NewCheck("Verify file integrity (SHA-256) after transfer", nil)
 
-	rulesCard := widget.NewCard("⚙️  Relay & Processing Rules", "", widget.NewForm(
+	rulesCard := settingsCard("Relay rules", "Which files are picked up and how they are processed.", widget.NewForm(
 		widget.NewFormItem("Archive folder (source)", s.backup),
 		widget.NewFormItem("Include patterns", s.include),
 		widget.NewFormItem("Exclude patterns", s.exclude),
 		widget.NewFormItem("File stability delay (s)", s.stable),
 		widget.NewFormItem("Max parallel transfers", s.parallel),
 		widget.NewFormItem("", s.verify),
-	))
+	), nil)
 
-	s.schedOn = widget.NewCheck("Enable active schedule hours", nil)
+	s.schedOn = widget.NewCheck("Only relay during active hours", nil)
 	s.schedStart, s.schedEnd, s.schedTZ = widget.NewEntry(), widget.NewEntry(), widget.NewEntry()
 	s.schedStart.SetPlaceHolder("06:00 (HH:MM)")
 	s.schedEnd.SetPlaceHolder("22:00 (HH:MM, earlier than start = overnight)")
 	s.schedTZ.SetPlaceHolder("Local, UTC, or e.g. Asia/Jakarta")
-	schedCard := widget.NewCard("🕐  Operating Hours & Timezone", "", widget.NewForm(
+	schedCard := settingsCard("Schedule", "Limit scanning to a daily time window.", widget.NewForm(
 		widget.NewFormItem("", s.schedOn),
 		widget.NewFormItem("Start time", s.schedStart),
 		widget.NewFormItem("End time", s.schedEnd),
 		widget.NewFormItem("Timezone", s.schedTZ),
-	))
+	), nil)
 
 	s.poll, s.retries, s.reconnect, s.keepAlive, s.idleScans, s.logDays =
 		widget.NewEntry(), widget.NewEntry(), widget.NewEntry(), widget.NewEntry(), widget.NewEntry(), widget.NewEntry()
 	s.strict = widget.NewCheck("Strict host key checking (reject unknown hosts)", nil)
-	s.initial = widget.NewCheck("Run immediate scan on application start", nil)
-	s.notify = widget.NewCheck("Enable desktop notifications", nil)
-	s.keychain = widget.NewCheck("Store passwords securely in system keychain (recommended)", nil)
+	s.initial = widget.NewCheck("Scan immediately when the app starts", nil)
+	s.notify = widget.NewCheck("Show desktop notifications", nil)
+	s.keychain = widget.NewCheck("Store passwords in the system keychain (recommended)", nil)
 
-	appCard := widget.NewCard("🔧  Connection Engine & App Behavior", "", widget.NewForm(
+	appCard := settingsCard("Engine", "Connection handling and application behaviour.", widget.NewForm(
 		widget.NewFormItem("Scan interval (s)", s.poll),
 		widget.NewFormItem("Max connection retries", s.retries),
 		widget.NewFormItem("Retry backoff (s)", s.reconnect),
@@ -95,32 +121,84 @@ func newSettingsView(w *Window) *settingsView {
 		widget.NewFormItem("", s.strict),
 		widget.NewFormItem("", s.initial),
 		widget.NewFormItem("", s.notify),
-	))
+	), nil)
 
-	subTabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("Source", theme.FolderIcon(), container.NewVScroll(container.NewPadded(s.src.card))),
-		container.NewTabItemWithIcon("Target", theme.UploadIcon(), container.NewVScroll(container.NewPadded(s.dst.card))),
-		container.NewTabItemWithIcon("Rules", theme.DocumentIcon(), container.NewVScroll(container.NewPadded(rulesCard))),
-		container.NewTabItemWithIcon("Schedule", theme.HistoryIcon(), container.NewVScroll(container.NewPadded(schedCard))),
-		container.NewTabItemWithIcon("Engine", theme.SettingsIcon(), container.NewVScroll(container.NewPadded(appCard))),
-	)
+	cards := []fyne.CanvasObject{s.src.card, s.localCard(), s.dst.card, rulesCard, schedCard, appCard}
+	s.tabBody = container.NewStack()
+	s.tabs = newSegmented([]string{"Source server", "Local backup", "Target server", "Rules", "Schedule", "Engine"}, func(i int) {
+		s.tabBody.Objects = []fyne.CanvasObject{cards[i]}
+		s.tabBody.Refresh()
+	})
+	s.tabs.Select(0)
 
-	save := widget.NewButtonWithIcon("💾  Save & Apply Settings", theme.DocumentSaveIcon(), s.save)
+	save := widget.NewButtonWithIcon("Save & apply", theme.DocumentSaveIcon(), s.save)
 	save.Importance = widget.HighImportance
-	revert := widget.NewButtonWithIcon("↶  Revert Changes", theme.ContentUndoIcon(), s.load)
-	revert.Importance = widget.MediumImportance
+	revert := widget.NewButtonWithIcon("Revert", theme.ContentUndoIcon(), s.load)
 
-	path := widget.NewLabel("📁  Config: " + w.ctl.Path)
-	path.Importance = widget.LowImportance
-	path.Truncation = fyne.TextTruncateEllipsis
-
-	footer := container.NewBorder(nil, nil, nil, container.NewHBox(revert, save), path)
-	s.content = container.NewBorder(nil, container.NewPadded(footer), nil, nil, subTabs)
+	about := mutedLabel(AppName + " " + versionLabel(w.version) + "  ·  config file: " + w.ctl.Path)
+	s.content = page(pageHeader("Settings", about, revert, save),
+		container.NewBorder(s.tabs.box, nil, nil, nil, s.tabBody))
 	s.load()
 	return s
 }
 
-func (s *settingsView) endpointForm(role, title, subtitle string) *endpointForm {
+// localCard builds the Local backup tab: a folder on this computer that is
+// uploaded to the target, next to (or instead of) the source server.
+func (s *settingsView) localCard() fyne.CanvasObject {
+	s.localOn = widget.NewCheck("Back up a folder on this computer to the target server", nil)
+	s.localDir = widget.NewEntry()
+	s.localDir.SetPlaceHolder("Choose a folder, e.g. /Users/you/Exports")
+	browse := widget.NewButtonWithIcon("Browse…", theme.FolderOpenIcon(), func() {
+		dialog.ShowFolderOpen(func(u fyne.ListableURI, err error) {
+			if err == nil && u != nil {
+				s.localDir.SetText(filepath.FromSlash(u.Path()))
+			}
+		}, s.w.win)
+	})
+	s.localTarget = widget.NewEntry()
+	s.localTarget.SetPlaceHolder("Leave empty to use the target server's folder")
+	s.localMode = widget.NewRadioGroup([]string{localKeepLabel, localArchiveLabel}, nil)
+	s.localMode.Required = true
+	s.localArchive = widget.NewEntry()
+	s.localArchive.SetPlaceHolder("archive")
+
+	note := widget.NewLabel("Local files go through the same rules, checks and schedule as the relay. " +
+		"Only files directly in the folder are backed up, not its subfolders.")
+	note.Importance = widget.LowImportance
+	note.Wrapping = fyne.TextWrapWord
+
+	check := widget.NewButtonWithIcon("Check folder", theme.SearchIcon(), s.testLocal)
+	form := widget.NewForm(
+		widget.NewFormItem("", s.localOn),
+		widget.NewFormItem("Folder", container.NewBorder(nil, nil, nil, browse, s.localDir)),
+		widget.NewFormItem("Target folder", s.localTarget),
+		widget.NewFormItem("After upload", s.localMode),
+		widget.NewFormItem("Archive subfolder", s.localArchive),
+		widget.NewFormItem("", note),
+	)
+	return settingsCard("Local backup", "Send files from a folder on this computer to the target server.", form, container.NewHBox(check))
+}
+
+func (s *settingsView) testLocal() {
+	cfg, err := s.read()
+	if err != nil {
+		dialog.ShowError(err, s.w.win)
+		return
+	}
+	cfg.ApplyDefaults()
+	res, err := setup.TestLocal(cfg)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("local folder: %w", err), s.w.win)
+		return
+	}
+	msg := fmt.Sprintf("%d file(s) in the folder, %d of them match the include/exclude rules.", res.Files, res.Matching)
+	if !cfg.LocalBackup.Keep() && !res.Writable {
+		msg += "\n\nThe folder is read-only, so files cannot be moved to the archive subfolder after upload."
+	}
+	dialog.ShowInformation("Folder OK", msg, s.w.win)
+}
+
+func (s *settingsView) endpointForm(role, title, description string) *endpointForm {
 	f := &endpointForm{role: role}
 	f.host, f.port, f.user = widget.NewEntry(), widget.NewEntry(), widget.NewEntry()
 	f.pass = widget.NewPasswordEntry()
@@ -141,13 +219,10 @@ func (s *settingsView) endpointForm(role, title, subtitle string) *endpointForm 
 		}, s.w.win)
 		d.Show()
 	})
-	browse.Importance = widget.MediumImportance
-
-	test := widget.NewButtonWithIcon("🔌  Test Connection", theme.ConfirmIcon(), func() { s.test(f) })
-	test.Importance = widget.HighImportance
+	test := widget.NewButtonWithIcon("Test connection", theme.LoginIcon(), func() { s.test(f) })
 
 	form := widget.NewForm(
-		widget.NewFormItem("Host address", f.host),
+		widget.NewFormItem("Host", f.host),
 		widget.NewFormItem("Port", f.port),
 		widget.NewFormItem("Username", f.user),
 		widget.NewFormItem("Password", f.pass),
@@ -156,7 +231,7 @@ func (s *settingsView) endpointForm(role, title, subtitle string) *endpointForm 
 		widget.NewFormItem("Remote folder", f.dir),
 		widget.NewFormItem("Host key pin", f.fingerprint),
 	)
-	f.card = widget.NewCard(title, subtitle, container.NewVBox(form, container.NewHBox(test)))
+	f.card = settingsCard(title, description, form, container.NewHBox(test))
 	return f
 }
 
@@ -168,9 +243,11 @@ func (s *settingsView) loadEndpoint(f *endpointForm, ep config.Endpoint) {
 	f.key.SetText(ep.PrivateKeyPath)
 	f.dir.SetText(ep.Directory)
 	f.fingerprint.SetText(ep.ExpectedFingerprint)
+	f.passHint.Importance = widget.LowImportance
 	switch {
 	case ep.Password != "":
-		f.passHint.SetText("⚠ Stored in plain text in config.json — save with the keychain option on to move it.")
+		f.passHint.Importance = widget.WarningImportance
+		f.passHint.SetText("Stored in plain text in config.json — save with the keychain option on to move it.")
 	case s.w.ctl.HasStoredPassword(ep):
 		f.pass.SetPlaceHolder("•••••••• saved in keychain")
 		f.passHint.SetText("Saved in the system keychain. Leave blank to keep it.")
@@ -178,6 +255,7 @@ func (s *settingsView) loadEndpoint(f *endpointForm, ep config.Endpoint) {
 		f.pass.SetPlaceHolder("")
 		f.passHint.SetText(fmt.Sprintf("Or set %s for servers/CI.", secrets.EnvVar(f.role, "password")))
 	}
+	f.passHint.Refresh()
 }
 
 func (s *settingsView) load() {
@@ -204,6 +282,17 @@ func (s *settingsView) load() {
 	s.schedStart.SetText(cfg.ActiveSchedule.Start)
 	s.schedEnd.SetText(cfg.ActiveSchedule.End)
 	s.schedTZ.SetText(cfg.ActiveSchedule.Timezone)
+
+	lb := cfg.LocalBackup
+	s.localOn.SetChecked(lb.Enabled)
+	s.localDir.SetText(lb.Directory)
+	s.localTarget.SetText(lb.TargetDirectory)
+	if lb.Keep() {
+		s.localMode.SetSelected(localKeepLabel)
+	} else {
+		s.localMode.SetSelected(localArchiveLabel)
+	}
+	s.localArchive.SetText(lb.ArchiveFolder)
 }
 
 func patterns(s string) []string {
@@ -268,6 +357,17 @@ func (s *settingsView) read() (*config.Config, error) {
 	}
 	if cfg.Exclude == nil {
 		cfg.Exclude = []string{}
+	}
+	mode := config.LocalKeep
+	if s.localMode.Selected == localArchiveLabel {
+		mode = config.LocalArchive
+	}
+	cfg.LocalBackup = config.LocalBackup{
+		Enabled:         s.localOn.Checked,
+		Directory:       strings.TrimSpace(s.localDir.Text),
+		TargetDirectory: strings.TrimSpace(s.localTarget.Text),
+		AfterUpload:     mode,
+		ArchiveFolder:   strings.TrimSpace(s.localArchive.Text),
 	}
 	return cfg, errors.Join(errs...)
 }

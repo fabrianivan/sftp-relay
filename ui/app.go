@@ -6,6 +6,7 @@ package ui
 
 import (
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -18,6 +19,15 @@ import (
 // AppName is shown in titles and notifications.
 const AppName = "SFTP Relay"
 
+// Screens, in sidebar order.
+const (
+	pageDashboard = "Dashboard"
+	pageHistory   = "History"
+	pageAudit     = "Audit"
+	pageSettings  = "Settings"
+	pageLogs      = "Logs"
+)
+
 // Window is the main application window.
 type Window struct {
 	app     fyne.App
@@ -25,7 +35,14 @@ type Window struct {
 	ctl     *setup.Controller
 	version string
 
-	tabs      *container.AppTabs
+	current string
+	pages   map[string]fyne.CanvasObject
+	nav     map[string]*railButton
+	body    *fyne.Container
+
+	engineDot  *canvas.Circle
+	engineText *canvas.Text
+
 	dashboard *dashboard
 	history   *historyView
 	settings  *settingsView
@@ -37,13 +54,17 @@ type Window struct {
 func Icon() fyne.Resource { return fyne.NewStaticResource("sftp-relay.png", assets.Icon) }
 
 // NewWindow builds the main window. configProblem, when non-nil, opens the
-// Settings tab with the validation error shown.
+// Settings screen with the validation error shown.
 func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem error) *Window {
 	w := &Window{app: a, ctl: ctl, version: version}
-	w.win = a.NewWindow(AppName + " v" + version)
+	w.win = a.NewWindow(AppName + " " + versionLabel(version))
 	w.win.SetIcon(Icon())
-	w.win.Resize(fyne.NewSize(1280, 820)) // Larger modern window
+	w.win.Resize(fyne.NewSize(1280, 820))
 	w.win.SetMaster()
+	w.win.SetPadded(false)
+
+	// The rail comes first: the dashboard reports engine state to it.
+	rail := w.buildRail()
 
 	w.dashboard = newDashboard(w)
 	w.history = newHistoryView(w)
@@ -51,22 +72,16 @@ func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem 
 	w.logs = newLogView(w)
 	w.audit = newAuditView(w)
 
-	// Modern tabs with better icons
-	w.tabs = container.NewAppTabs(
-		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), w.dashboard.content),
-		container.NewTabItemWithIcon("History", theme.HistoryIcon(), w.history.content),
-		container.NewTabItemWithIcon("Audit", theme.DocumentIcon(), w.audit.build()),
-		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), w.settings.content),
-		container.NewTabItemWithIcon("Logs", theme.ListIcon(), w.logs.content),
-	)
-	w.tabs.OnSelected = func(t *container.TabItem) {
-		if t.Text == "History" {
-			w.history.refresh()
-		} else if t.Text == "Audit" {
-			w.audit.refresh()
-		}
+	w.pages = map[string]fyne.CanvasObject{
+		pageDashboard: w.dashboard.content,
+		pageHistory:   w.history.content,
+		pageAudit:     w.audit.content,
+		pageSettings:  w.settings.content,
+		pageLogs:      w.logs.content,
 	}
-	w.win.SetContent(w.tabs)
+	w.body = container.NewStack()
+	w.win.SetContent(container.NewBorder(nil, nil, rail, nil, w.body))
+	w.showPage(pageDashboard)
 
 	if desk, ok := a.(desktop.App); ok {
 		w.setupTray(desk)
@@ -74,10 +89,90 @@ func NewWindow(a fyne.App, ctl *setup.Controller, version string, configProblem 
 	}
 
 	if configProblem != nil {
-		w.tabs.SelectIndex(3) // Settings tab moved to index 3
+		w.showPage(pageSettings)
 		dialog.ShowError(configProblem, w.win)
 	}
 	return w
+}
+
+// buildRail creates the narrow navigation strip: logo, destinations and the
+// engine's state at the bottom, visible from every screen.
+func (w *Window) buildRail() fyne.CanvasObject {
+	logo := canvas.NewImageFromResource(Icon())
+	logo.FillMode = canvas.ImageFillContain
+	logo.SetMinSize(fyne.NewSquareSize(38))
+
+	items := []struct {
+		name string
+		icon fyne.Resource
+	}{
+		{pageDashboard, theme.HomeIcon()},
+		{pageHistory, theme.HistoryIcon()},
+		{pageAudit, theme.DocumentIcon()},
+		{pageSettings, theme.SettingsIcon()},
+		{pageLogs, theme.ListIcon()},
+	}
+	w.nav = map[string]*railButton{}
+	list := vstack(4)
+	for _, it := range items {
+		b := newRailButton(it.name, it.icon, func() { w.showPage(it.name) })
+		w.nav[it.name] = b
+		list.Add(b)
+	}
+
+	var dot fyne.CanvasObject
+	w.engineDot, dot = newDot(ColorMuted)
+	w.engineText = newText("Stopped", 11, ColorForegroundSub, styleBold)
+	w.engineText.Alignment = fyne.TextAlignCenter
+	engine := vstack(5, dot, w.engineText)
+
+	edge := canvas.NewRectangle(ColorSeparator)
+	edge.SetMinSize(fyne.NewSize(1, 1))
+	return container.NewStack(
+		canvas.NewRectangle(ColorRail),
+		container.NewBorder(nil, nil, nil, edge,
+			container.NewBorder(
+				pad(18, 16, 0, 0, container.NewCenter(logo)),
+				pad(0, 16, 0, 0, engine),
+				nil, nil,
+				pad(0, 0, 8, 8, list))),
+	)
+}
+
+// versionLabel formats a build version for display: 2.0.0 becomes v2.0.0,
+// while tags and names such as v2.0.0 or dev are shown as they are.
+func versionLabel(v string) string {
+	if v != "" && v[0] >= '0' && v[0] <= '9' {
+		return "v" + v
+	}
+	return v
+}
+
+// showPage switches the visible screen.
+func (w *Window) showPage(name string) {
+	p, ok := w.pages[name]
+	if !ok {
+		return
+	}
+	w.current = name
+	for n, b := range w.nav {
+		b.setSelected(n == name)
+	}
+	w.body.Objects = []fyne.CanvasObject{p}
+	w.body.Refresh()
+	w.dashboard.flow.setShown(name == pageDashboard)
+	switch name {
+	case pageHistory:
+		w.history.refresh()
+	case pageAudit:
+		w.audit.refresh()
+	}
+}
+
+// setEngineState updates the status light at the bottom of the rail.
+func (w *Window) setEngineState(label string, t tone) {
+	setDot(w.engineDot, t.color())
+	setText(w.engineText, label, ColorForegroundSub)
 }
 
 func (w *Window) setupTray(desk desktop.App) {

@@ -7,92 +7,112 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
-// Theme is SFTP Relay's modern dark theme with vibrant gradients.
+// Theme is SFTP Relay's look: a deep ink canvas on which each stream of
+// files has its own colour — sky for the source server, violet for the local
+// folder, and teal for the target they both flow into. Teal doubles as the
+// colour of everything that is healthy or can be pressed.
 type Theme struct{}
 
 var _ fyne.Theme = (*Theme)(nil)
 
-// Enhanced palette with modern color scheme
+func rgb(r, g, b uint8) color.NRGBA { return color.NRGBA{R: r, G: g, B: b, A: 255} }
+
+// alpha returns c with its opacity replaced.
+func alpha(c color.NRGBA, a uint8) color.NRGBA {
+	c.A = a
+	return c
+}
+
+// Palette. Everything in the UI draws from these values.
 var (
-	// Primary gradient colors
-	ColorAccent     = color.NRGBA{R: 99, G: 102, B: 241, A: 255}  // Indigo-500 (vibrant primary)
-	ColorAccentDark = color.NRGBA{R: 79, G: 70, B: 229, A: 255}   // Indigo-600
-	ColorAccentGlow = color.NRGBA{R: 99, G: 102, B: 241, A: 60}   // Glow effect
-	
-	// Status colors with better contrast
-	ColorSuccess     = color.NRGBA{R: 16, G: 185, B: 129, A: 255}  // Emerald-500
-	ColorSuccessGlow = color.NRGBA{R: 16, G: 185, B: 129, A: 40}
-	ColorWarning     = color.NRGBA{R: 251, G: 146, B: 60, A: 255}  // Orange-500
-	ColorWarningGlow = color.NRGBA{R: 251, G: 146, B: 60, A: 40}
-	ColorError       = color.NRGBA{R: 244, G: 63, B: 94, A: 255}   // Rose-500
-	ColorErrorGlow   = color.NRGBA{R: 244, G: 63, B: 94, A: 40}
-	
-	// Background layers (glass-morphism inspired)
-	ColorBackground     = color.NRGBA{R: 10, G: 10, B: 20, A: 255}        // Deep navy
-	ColorBackgroundAlt  = color.NRGBA{R: 15, G: 15, B: 30, A: 255}        // Slightly lighter
-	ColorCard           = color.NRGBA{R: 20, G: 20, B: 40, A: 245}        // Card background
-	ColorCardHover      = color.NRGBA{R: 25, G: 25, B: 50, A: 255}        // Card hover
-	ColorCardBorder     = color.NRGBA{R: 60, G: 60, B: 100, A: 80}        // Subtle border
-	
-	// Text hierarchy
-	ColorForeground    = color.NRGBA{R: 248, G: 250, B: 252, A: 255}  // Almost white
-	ColorForegroundSub = color.NRGBA{R: 203, G: 213, B: 225, A: 255}  // Slate-300
-	ColorMuted         = color.NRGBA{R: 148, G: 163, B: 184, A: 255}  // Slate-400
-	ColorMutedDark     = color.NRGBA{R: 100, G: 116, B: 139, A: 255}  // Slate-500
-	
-	// Interactive elements
-	ColorButtonPrimary   = color.NRGBA{R: 99, G: 102, B: 241, A: 255}
-	ColorButtonHover     = color.NRGBA{R: 79, G: 70, B: 229, A: 255}
-	ColorButtonSecondary = color.NRGBA{R: 30, G: 30, B: 50, A: 255}
-	
-	// Special effects
-	ColorShadow      = color.NRGBA{R: 0, G: 0, B: 0, A: 140}
-	ColorShadowLight = color.NRGBA{R: 0, G: 0, B: 0, A: 60}
-	ColorHighlight   = color.NRGBA{R: 255, G: 255, B: 255, A: 10}
+	// Surfaces, from the window background up to raised controls.
+	ColorBackground = rgb(8, 13, 17)
+	ColorRail       = rgb(5, 9, 12)
+	ColorSurface    = rgb(14, 22, 28)
+	ColorRaised     = rgb(24, 36, 45)
+	ColorBorder     = rgb(31, 46, 57)
+	ColorSeparator  = rgb(22, 33, 41)
+
+	// Text, from primary to faint.
+	ColorForeground    = rgb(232, 241, 242)
+	ColorForegroundSub = rgb(170, 189, 195)
+	ColorMuted         = rgb(116, 138, 147)
+	ColorFaint         = rgb(78, 98, 107)
+
+	// Streams.
+	ColorSource = rgb(86, 170, 255)  // files arriving from the source server
+	ColorLocal  = rgb(178, 144, 255) // files backed up from this computer
+	ColorAccent = rgb(54, 211, 198)  // the target; also "healthy" and "press me"
+
+	ColorOnAccent = rgb(2, 26, 25)
+	ColorSuccess  = ColorAccent
+	ColorWarning  = rgb(242, 183, 82)
+	ColorError    = rgb(251, 113, 121)
 )
 
 func (Theme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 	switch name {
 	case theme.ColorNameBackground:
 		return ColorBackground
-	case theme.ColorNameButton:
-		return ColorButtonSecondary
-	case theme.ColorNameDisabledButton:
-		return color.NRGBA{R: 20, G: 20, B: 35, A: 255}
-	case theme.ColorNameDisabled:
-		return ColorMutedDark
 	case theme.ColorNameForeground:
 		return ColorForeground
-	case theme.ColorNameHover:
-		return ColorCardHover
-	case theme.ColorNameInputBackground:
-		return color.NRGBA{R: 15, G: 15, B: 30, A: 255}
-	case theme.ColorNameInputBorder:
-		return ColorCardBorder
-	case theme.ColorNamePlaceHolder:
+	case theme.ColorNameDisabled: // also used for low-importance (secondary) text
 		return ColorMuted
-	case theme.ColorNamePrimary:
+	case theme.ColorNamePlaceHolder:
+		return ColorFaint
+
+	case theme.ColorNameButton:
+		return ColorRaised
+	case theme.ColorNameDisabledButton:
+		return rgb(15, 23, 29)
+	case theme.ColorNameHover:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 15}
+	case theme.ColorNamePressed:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 30}
+
+	case theme.ColorNamePrimary, theme.ColorNameHyperlink:
 		return ColorAccent
-	case theme.ColorNameScrollBar:
-		return color.NRGBA{R: 60, G: 60, B: 100, A: 180}
-	case theme.ColorNameSeparator:
-		return color.NRGBA{R: 40, G: 40, B: 70, A: 255}
-	case theme.ColorNameShadow:
-		return ColorShadow
+	case theme.ColorNameForegroundOnPrimary:
+		return ColorOnAccent
+	case theme.ColorNameFocus:
+		return alpha(ColorAccent, 105)
+	case theme.ColorNameSelection:
+		return alpha(ColorAccent, 46)
+
+	case theme.ColorNameInputBackground:
+		return ColorBackground
+	case theme.ColorNameInputBorder:
+		return ColorBorder
+
 	case theme.ColorNameSuccess:
 		return ColorSuccess
 	case theme.ColorNameWarning:
 		return ColorWarning
 	case theme.ColorNameError:
 		return ColorError
+	case theme.ColorNameForegroundOnSuccess, theme.ColorNameForegroundOnWarning, theme.ColorNameForegroundOnError:
+		return ColorBackground
+
 	case theme.ColorNameHeaderBackground:
-		return ColorBackgroundAlt
-	case theme.ColorNameMenuBackground, theme.ColorNameOverlayBackground:
-		return color.NRGBA{R: 20, G: 20, B: 40, A: 250}
-	case theme.ColorNameSelection:
-		return color.NRGBA{R: 99, G: 102, B: 241, A: 60}
-	case theme.ColorNameFocus:
-		return color.NRGBA{R: 99, G: 102, B: 241, A: 200}
+		return ColorRaised
+	case theme.ColorNameMenuBackground:
+		return ColorRaised
+	case theme.ColorNameOverlayBackground:
+		return ColorSurface
+	case theme.ColorNameSeparator:
+		return ColorSeparator
+	case theme.ColorNameScrollBar:
+		return rgb(58, 79, 92)
+	case theme.ColorNameScrollBarBackground:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 8}
+	case theme.ColorNameShadow:
+		return color.NRGBA{A: 44}
+
+	// Stream colours, so icons can be tinted to match their stream.
+	case colorNameSource:
+		return ColorSource
+	case colorNameLocal:
+		return ColorLocal
 	default:
 		return theme.DefaultTheme().Color(name, theme.VariantDark)
 	}
@@ -104,23 +124,29 @@ func (Theme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultThem
 func (Theme) Size(name fyne.ThemeSizeName) float32 {
 	switch name {
 	case theme.SizeNamePadding:
-		return 10
+		return 6
+	case theme.SizeNameInnerPadding:
+		return 8
 	case theme.SizeNameText:
 		return 14
-	case theme.SizeNameHeadingText:
-		return 24
-	case theme.SizeNameSubHeadingText:
-		return 18
 	case theme.SizeNameCaptionText:
 		return 12
-	case theme.SizeNameInlineIcon:
+	case theme.SizeNameSubHeadingText:
+		return 16
+	case theme.SizeNameHeadingText:
 		return 22
-	case theme.SizeNameScrollBar:
-		return 12
-	case theme.SizeNameSelectionRadius:
-		return 8
+	case theme.SizeNameInlineIcon:
+		return 20
 	case theme.SizeNameInputBorder:
-		return 2
+		return 1
+	case theme.SizeNameInputRadius:
+		return 8
+	case theme.SizeNameSelectionRadius:
+		return 5
+	case theme.SizeNameScrollBar:
+		return 10
+	case theme.SizeNameScrollBarSmall:
+		return 4
 	default:
 		return theme.DefaultTheme().Size(name)
 	}

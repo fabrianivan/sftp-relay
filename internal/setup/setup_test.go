@@ -148,3 +148,33 @@ func TestTestReportsBadPassword(t *testing.T) {
 }
 
 func relayRetry() sftpclient.Retry { return sftpclient.Retry{Attempts: 1} }
+
+func TestRuntimeForLocalBackupOnly(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{"a.csv": "1", "b.csv": "2", "notes.tmp": "skipped by the default rules"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{
+		Target:      config.Endpoint{Host: "target.example.com", Username: "relay", Directory: "/in"},
+		LocalBackup: config.LocalBackup{Enabled: true, Directory: dir},
+	}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	rt := Runtime(filepath.Join(t.TempDir(), "config.json"), cfg, nil, logging.Discard())
+	if rt.Source != nil || rt.Target == nil || rt.Local == nil {
+		t.Fatalf("runtime = source %v, target %v, local %v", rt.Source != nil, rt.Target != nil, rt.Local != nil)
+	}
+
+	res, err := TestLocal(cfg)
+	if err != nil || res.Files != 3 || res.Matching != 2 || !res.Writable {
+		t.Fatalf("TestLocal = %+v, %v", res, err)
+	}
+	cfg.LocalBackup.Directory = filepath.Join(dir, "missing")
+	if _, err := TestLocal(cfg); err == nil {
+		t.Fatal("a missing folder should be reported")
+	}
+}

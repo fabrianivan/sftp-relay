@@ -92,11 +92,55 @@ func Runtime(cfgPath string, cfg *config.Config, store secrets.Store, log *loggi
 			HostKeyPolicy(cfgPath, cfg, ep, log).Callback(), dialTimeout)
 		return sftpclient.New(role, ep.Addr(), dial, keepAlive, log)
 	}
-	rt := relay.Runtime{Config: cfg, Source: mk(Source)}
+	rt := relay.Runtime{Config: cfg}
+	if cfg.Source.Enabled() {
+		rt.Source = mk(Source)
+	}
 	if cfg.Target.Enabled() {
 		rt.Target = mk(Target)
 	}
+	if cfg.LocalBackupActive() {
+		// Keep mode opens the folder read-only: nothing on this computer can
+		// be moved or deleted through the session.
+		dir := cfg.LocalBackup.Directory
+		rt.Local = sftpclient.New("local folder", dir, sftpclient.LocalDialer(dir, cfg.LocalBackup.Keep()), 0, log)
+	}
 	return rt
+}
+
+// LocalResult describes a check of the local backup folder.
+type LocalResult struct {
+	Files    int  // regular files in the folder
+	Matching int  // of those, files the include/exclude rules pick up
+	Writable bool // the folder can be written to (needed to archive files after upload)
+}
+
+// TestLocal checks that the local backup folder exists and can be read.
+func TestLocal(cfg *config.Config) (LocalResult, error) {
+	var res LocalResult
+	dir := cfg.LocalBackup.Directory
+	if dir == "" {
+		return res, errors.New("choose a folder first")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return res, err
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		res.Files++
+		if cfg.Matches(e.Name()) {
+			res.Matching++
+		}
+	}
+	probe, err := os.CreateTemp(dir, ".sftp-relay-write-test-*")
+	if err == nil {
+		_ = probe.Close()
+		res.Writable = os.Remove(probe.Name()) == nil
+	}
+	return res, nil
 }
 
 // TestResult describes a connection test.
@@ -248,6 +292,15 @@ func detectConfigChanges(old, new *config.Config) map[string]interface{} {
 	}
 	if old.Target.Host != new.Target.Host {
 		changes["target.host"] = map[string]string{"from": old.Target.Host, "to": new.Target.Host}
+	}
+	if old.LocalBackup.Enabled != new.LocalBackup.Enabled {
+		changes["localBackup.enabled"] = map[string]bool{"from": old.LocalBackup.Enabled, "to": new.LocalBackup.Enabled}
+	}
+	if old.LocalBackup.Directory != new.LocalBackup.Directory {
+		changes["localBackup.directory"] = map[string]string{"from": old.LocalBackup.Directory, "to": new.LocalBackup.Directory}
+	}
+	if old.LocalBackup.AfterUpload != new.LocalBackup.AfterUpload {
+		changes["localBackup.afterUpload"] = map[string]string{"from": old.LocalBackup.AfterUpload, "to": new.LocalBackup.AfterUpload}
 	}
 	if old.PollInterval != new.PollInterval {
 		changes["pollInterval"] = map[string]int{"from": old.PollInterval, "to": new.PollInterval}

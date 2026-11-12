@@ -3,16 +3,17 @@ package ui
 import (
 	"fmt"
 	"image/color"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/fabrianivan/sftp-relay/internal/history"
 	"github.com/fabrianivan/sftp-relay/internal/relay"
 )
 
@@ -21,70 +22,104 @@ const maxActivity = 60
 type activity struct {
 	at   time.Time
 	text string
-	bad  bool
+	tone tone
 }
 
-type transferRow struct {
-	box *fyne.Container
-	bar *widget.ProgressBar
-}
-
-type serverStatusRow struct {
-	dot      *canvas.Circle
-	title    *widget.Label
-	subtitle *widget.Label
-	badge    *widget.Label
-	box      fyne.CanvasObject
-}
-
-func newServerStatusRow(title string) *serverStatusRow {
-	r := &serverStatusRow{
-		dot:      canvas.NewCircle(ColorMuted),
-		title:    widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		subtitle: widget.NewLabel("—"),
-		badge:    widget.NewLabelWithStyle("Idle", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
+// feedTone is the colour of a stream: sky for the source server, violet for
+// the local folder.
+func feedTone(feed string) tone {
+	if feed == relay.FeedLocal {
+		return toneLocal
 	}
-	r.subtitle.Importance = widget.MediumImportance
-	r.subtitle.Truncation = fyne.TextTruncateEllipsis
-	r.badge.Importance = widget.MediumImportance
+	return toneInfo
+}
 
-	// Enhanced dot with better visual
-	dotObj := container.NewGridWrap(fyne.NewSize(12, 12), r.dot)
+// transferRow shows one file that is travelling right now.
+type transferRow struct {
+	feed  string
+	box   *fyne.Container
+	head  *fyne.Container
+	stat  *canvas.Text
+	meter *meter
+}
 
-	// Improved header layout
-	header := container.NewBorder(nil, nil,
-		container.NewHBox(
-			container.NewCenter(dotObj),
-			r.title,
-		),
-		r.badge,
-	)
+// feedRow is a line of the activity list.
+type feedRow struct {
+	widget.BaseWidget
+	when *widget.Label
+	dot  *canvas.Circle
+	msg  *widget.Label
+	box  *fyne.Container
+}
 
-	// Better spacing for subtitle
-	r.box = container.NewVBox(
-		header,
-		container.NewPadded(r.subtitle),
-	)
+func newFeedRow() *feedRow {
+	r := &feedRow{when: widget.NewLabel("00:00:00"), msg: widget.NewLabel("")}
+	r.when.TextStyle = styleMono
+	r.when.Importance = widget.LowImportance
+	r.msg.Truncation = fyne.TextTruncateEllipsis
+	var dot fyne.CanvasObject
+	r.dot, dot = newDot(ColorFaint)
+	r.box = container.NewBorder(nil, nil, hstack(4, r.when, dot), nil, r.msg)
+	r.ExtendBaseWidget(r)
 	return r
+}
+
+func (r *feedRow) CreateRenderer() fyne.WidgetRenderer { return widget.NewSimpleRenderer(r.box) }
+
+func (r *feedRow) set(a activity) {
+	r.when.SetText(a.at.Format(time.TimeOnly))
+	if a.tone == toneNeutral {
+		setDot(r.dot, ColorFaint)
+	} else {
+		setDot(r.dot, a.tone.color())
+	}
+	if a.tone == toneDanger {
+		r.msg.Importance = widget.DangerImportance
+	} else {
+		r.msg.Importance = widget.MediumImportance
+	}
+	r.msg.Text = a.text
+	r.msg.Refresh()
+}
+
+// figure is one of today's numbers: a caption over a large value.
+type figure struct {
+	value *canvas.Text
+	box   *fyne.Container
+}
+
+func newFigure(caption string) *figure {
+	f := &figure{value: newText("0", 28, ColorForeground, styleBold)}
+	f.box = vstack(4, overline(caption), f.value)
+	return f
 }
 
 type dashboard struct {
 	w       *Window
 	content fyne.CanvasObject
 
-	srcRow, dstRow, scanRow *serverStatusRow
+	stateDot *canvas.Circle
+	headline *canvas.Text
+	subline  *widget.Label
+	toggle   *widget.Button
+	scan     *widget.Button
 
-	deliveredVal *canvas.Text
-	failedVal    *canvas.Text
-	volVal       *canvas.Text
+	flow *flowMap
 
-	toggle, scan *widget.Button
-	activeCard   *widget.Card
-	transfers    *fyne.Container
-	idle         *widget.Label
-	rows         map[string]*transferRow
-	feed         []activity
-	feedList     *widget.List
+	relayed, failed, volume *figure
+	chart                   *hourChart
+	chartNote               *canvas.Text
+	chartAt                 time.Time
+
+	active      *fyne.Container
+	activeCount *pill
+	transfers   *fyne.Container
+	idle        *fyne.Container
+	rows        map[string]*transferRow
+
+	feed      []activity
+	feedList  *widget.List
+	feedEmpty *fyne.Container
 
 	onStateChange func(running bool)
 	lastRunning   *bool
@@ -100,198 +135,65 @@ func newDashboard(w *Window) *dashboard {
 	return d
 }
 
-func statCard(title string, val *canvas.Text) fyne.CanvasObject {
-	// Create enhanced stat card with better visual hierarchy
-	t := widget.NewLabelWithStyle(title, fyne.TextAlignCenter, fyne.TextStyle{})
-	t.Importance = widget.MediumImportance
-
-	// Add visual container for value
-	valueContainer := container.NewCenter(
-		container.NewVBox(
-			container.NewCenter(val),
-			container.NewPadded(t),
-		),
-	)
-
-	card := widget.NewCard("", "", valueContainer)
-	return card
-}
-
 func (d *dashboard) build() {
-	// Modern logo with glow effect
-	logo := canvas.NewImageFromResource(Icon())
-	logo.FillMode = canvas.ImageFillContain
-	logo.SetMinSize(fyne.NewSize(64, 64))
-
-	// Title with gradient effect (simulated with color)
-	title := canvas.NewText(AppName, ColorAccent)
-	title.TextSize = 32
-	title.TextStyle = fyne.TextStyle{Bold: true}
-
-	// Modern version badge
-	vBadge := widget.NewLabelWithStyle("v"+d.w.version, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	vBadge.Importance = widget.SuccessImportance
-
-	badgeContainer := container.NewStack(
-		canvas.NewRectangle(ColorSuccessGlow),
-		container.NewPadded(vBadge),
-	)
-
-	titleRow := container.NewHBox(
-		title,
-		layout.NewSpacer(),
-		badgeContainer,
-	)
-
-	// Improved subtitle with better typography
-	sub := widget.NewLabel("Automated SFTP synchronization · SHA-256 integrity · Smart archiving")
-	sub.Importance = widget.MediumImportance
-	sub.Wrapping = fyne.TextWrapWord
-
-	// Enhanced header layout
-	logoWithPadding := container.NewPadded(container.NewCenter(logo))
-	headerContent := container.NewVBox(
-		titleRow,
-		container.NewPadded(sub),
-	)
-	header := container.NewBorder(nil, nil, logoWithPadding, nil, headerContent)
-
-	d.srcRow = newServerStatusRow("📥  SOURCE SERVER")
-	d.dstRow = newServerStatusRow("📤  TARGET SERVER")
-	d.scanRow = newServerStatusRow("⚡  RELAY ENGINE")
-
-	// Enhanced status card with better spacing
-	statusTitle := canvas.NewText("Connection Status", ColorForeground)
-	statusTitle.TextSize = 18
-	statusTitle.TextStyle = fyne.TextStyle{Bold: true}
-
-	status := widget.NewCard("", "", container.NewVBox(
-		statusTitle,
-		container.NewPadded(widget.NewSeparator()),
-		d.srcRow.box,
-		container.NewPadded(widget.NewSeparator()),
-		d.dstRow.box,
-		container.NewPadded(widget.NewSeparator()),
-		d.scanRow.box,
-	))
-
-	// Enhanced stat values with better typography
-	d.deliveredVal = canvas.NewText("0", ColorAccent)
-	d.deliveredVal.TextSize = 36
-	d.deliveredVal.TextStyle = fyne.TextStyle{Bold: true}
-
-	d.failedVal = canvas.NewText("0", ColorMuted)
-	d.failedVal.TextSize = 36
-	d.failedVal.TextStyle = fyne.TextStyle{Bold: true}
-
-	d.volVal = canvas.NewText("0 B", ColorForeground)
-	d.volVal.TextSize = 32
-	d.volVal.TextStyle = fyne.TextStyle{Bold: true}
-
-	// Modern stats grid with better labels
-	statsTitle := canvas.NewText("📊  Today's Statistics", ColorForeground)
-	statsTitle.TextSize = 18
-	statsTitle.TextStyle = fyne.TextStyle{Bold: true}
-
-	stats := container.NewVBox(
-		statsTitle,
-		container.NewPadded(widget.NewSeparator()),
-		container.NewGridWithColumns(3,
-			statCard("Files Relayed", d.deliveredVal),
-			statCard("Failed Transfers", d.failedVal),
-			statCard("Data Volume", d.volVal),
-		),
-	)
-
-	// Enhanced control buttons with modern styling
-	d.toggle = widget.NewButtonWithIcon("Start Relay", theme.MediaPlayIcon(), d.onToggle)
+	// Headline: what the relay is doing, in words.
+	var dot fyne.CanvasObject
+	d.stateDot, dot = newDotSized(ColorMuted, 11)
+	d.headline = newText("Relay", 24, ColorForeground, styleBold)
+	d.subline = mutedLabel("")
+	d.toggle = widget.NewButtonWithIcon("Start relay", theme.MediaPlayIcon(), d.onToggle)
 	d.toggle.Importance = widget.HighImportance
-
-	d.scan = widget.NewButtonWithIcon("Scan Now", theme.ViewRefreshIcon(), func() {
+	d.scan = widget.NewButtonWithIcon("Scan now", theme.ViewRefreshIcon(), func() {
 		d.w.ctl.Engine.ScanNow()
 	})
-	d.scan.Importance = widget.MediumImportance
+	header := container.NewBorder(nil, nil, nil, vcenter(hstack(8, d.scan, d.toggle)),
+		vstack(6, hstack(12, pad(0, 0, 2, 0, dot), d.headline), tight(d.subline)))
 
-	controlTitle := canvas.NewText("🎮  Control Panel", ColorForeground)
-	controlTitle.TextSize = 18
-	controlTitle.TextStyle = fyne.TextStyle{Bold: true}
+	// The relay map.
+	d.flow = newFlowMap()
+	flow := panelInset(20, d.flow)
 
-	controls := container.NewVBox(
-		controlTitle,
-		container.NewPadded(widget.NewSeparator()),
-		container.NewGridWithColumns(2, d.toggle, d.scan),
-	)
+	// Today's figures next to the last 24 hours.
+	d.relayed = newFigure("RELAYED TODAY")
+	d.failed = newFigure("FAILED TODAY")
+	d.volume = newFigure("DATA SENT")
+	d.chart = newHourChart()
+	d.chartNote = newText("", 11, ColorMuted, fyne.TextStyle{})
+	figures := hstack(34, d.relayed.box, d.failed.box, d.volume.box)
+	divider := canvas.NewRectangle(ColorSeparator)
+	divider.SetMinSize(fyne.NewSize(1, 1))
+	trend := container.NewBorder(
+		container.NewBorder(nil, nil, overline("LAST 24 HOURS"), d.chartNote), nil, nil, nil,
+		pad(8, 0, 0, 0, d.chart))
+	today := panelInset(18, container.NewBorder(nil, nil,
+		hstack(26, vcenter(figures), divider), nil, pad(0, 0, 26, 0, trend)))
 
-	// Enhanced active transfers section
-	d.idle = widget.NewLabelWithStyle("💤  No transfers in progress · Standing by", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
-	d.idle.Importance = widget.MediumImportance
+	// Transfers in progress.
+	d.activeCount = newPill("0", toneInfo)
+	d.activeCount.Hide()
+	d.transfers = vstack(14)
+	d.idle = emptyState("No transfers in progress", "Files show up here while they travel to the target.")
+	d.active = titledPanel("Active transfers", vcenter(d.activeCount),
+		container.NewStack(d.idle, container.NewVScroll(d.transfers)))
 
-	d.transfers = container.NewVBox(container.NewPadded(d.idle))
-	d.activeCard = widget.NewCard("🔄  Active Transfers", "", d.transfers)
-
-	// Modern activity feed
-	feedTitle := canvas.NewText("📡  Live Activity Feed", ColorForeground)
-	feedTitle.TextSize = 18
-	feedTitle.TextStyle = fyne.TextStyle{Bold: true}
-
+	// Activity.
 	d.feedList = widget.NewList(
 		func() int { return len(d.feed) },
-		func() fyne.CanvasObject {
-			ts := widget.NewLabel("00:00:00")
-			ts.TextStyle = fyne.TextStyle{Monospace: true}
-			ts.Importance = widget.MediumImportance
-			msg := widget.NewLabel("")
-			msg.Truncation = fyne.TextTruncateEllipsis
-			return container.NewBorder(nil, nil, ts, nil, msg)
-		},
+		func() fyne.CanvasObject { return newFeedRow() },
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			if i < 0 || i >= len(d.feed) {
 				return
 			}
-			a := d.feed[len(d.feed)-1-i]
-			c := o.(*fyne.Container)
-			msg := c.Objects[0].(*widget.Label)
-			ts := c.Objects[1].(*widget.Label)
-			ts.SetText(a.at.Format(time.TimeOnly))
-			msg.SetText(a.text)
-			if a.bad {
-				msg.Importance = widget.DangerImportance
-			} else {
-				msg.Importance = widget.MediumImportance
-			}
+			o.(*feedRow).set(d.feed[len(d.feed)-1-i])
 		},
 	)
+	d.feedEmpty = emptyState("No activity yet", "Scans and transfers are listed here as they happen.")
+	activityPanel := titledPanel("Activity", nil, container.NewStack(d.feedList, d.feedEmpty))
 
-	// Enhanced two-column layout with better proportions
-	left := container.NewVBox(
-		container.NewPadded(status),
-		container.NewPadded(stats),
-		container.NewPadded(controls),
-	)
+	body := container.NewBorder(pad(0, gap, 0, 0, vstack(gap, flow, today)), nil, nil, nil,
+		columns(gap, []float32{5, 6}, d.active, activityPanel))
 
-	right := container.NewBorder(
-		container.NewPadded(d.activeCard),
-		nil, nil, nil,
-		container.NewBorder(
-			container.NewPadded(feedTitle),
-			nil, nil, nil,
-			d.feedList,
-		),
-	)
-
-	body := container.New(layout.NewGridLayoutWithColumns(2), left, right)
-
-	// Final layout with enhanced spacing
-	d.content = container.NewPadded(
-		container.NewBorder(
-			container.NewVBox(
-				header,
-				container.NewPadded(widget.NewSeparator()),
-			),
-			nil, nil, nil,
-			body,
-		),
-	)
+	d.content = page(header, body)
 	d.render(d.w.ctl.Engine.Status())
 }
 
@@ -303,17 +205,18 @@ func (d *dashboard) onToggle() {
 	}
 	if err := d.w.ctl.Config().Validate(); err != nil {
 		dialog.ShowError(fmt.Errorf("fix the configuration first:\n%w", err), d.w.win)
-		d.w.tabs.SelectIndex(2)
+		d.w.showPage(pageSettings)
 		return
 	}
 	eng.Start()
 }
 
-func (d *dashboard) addActivity(text string, bad bool) {
-	d.feed = append(d.feed, activity{at: time.Now(), text: text, bad: bad})
+func (d *dashboard) addActivity(text string, t tone) {
+	d.feed = append(d.feed, activity{at: time.Now(), text: text, tone: t})
 	if len(d.feed) > maxActivity {
 		d.feed = d.feed[len(d.feed)-maxActivity:]
 	}
+	d.feedEmpty.Hide()
 	d.feedList.Refresh()
 }
 
@@ -329,58 +232,127 @@ func (d *dashboard) listen() {
 func (d *dashboard) apply(ev relay.Event) {
 	switch ev.Kind {
 	case relay.TransferStarted:
-		d.row(ev.File)
-		d.addActivity("Started "+ev.File+" ("+relay.HumanBytes(ev.Size)+")", false)
+		d.row(ev.Feed, ev.File)
+		d.addActivity("Started "+ev.File+" ("+relay.HumanBytes(ev.Size)+")", feedTone(ev.Feed))
 	case relay.TransferProgress:
-		r := d.row(ev.File)
+		r := d.row(ev.Feed, ev.File)
+		var done float64
 		if ev.Size > 0 {
-			r.bar.SetValue(float64(ev.Transferred) / float64(ev.Size))
+			done = float64(ev.Transferred) / float64(ev.Size)
 		}
-		speed := relay.HumanBytes(int64(ev.Speed)) + "/s"
-		r.bar.TextFormatter = func() string { return fmt.Sprintf("%.0f%%  ·  %s", r.bar.Value*100, speed) }
-		r.bar.Refresh()
+		r.meter.SetValue(done)
+		setText(r.stat, fmt.Sprintf("%.0f%%  ·  %s/s", done*100, relay.HumanBytes(int64(ev.Speed))), ColorMuted)
+		r.head.Refresh()
 	case relay.TransferDone:
-		d.dropRow(ev.File)
-		d.addActivity("✓ "+ev.File+" "+ev.Message, false)
+		d.dropRow(ev.Feed, ev.File)
+		what := ev.Message
+		if ev.Feed == relay.FeedLocal && what == string(history.Delivered) {
+			what = "backed up"
+		}
+		d.addActivity(ev.File+" "+what, toneSuccess)
+		d.refreshChart()
 		d.w.history.refreshIfVisible()
 	case relay.TransferFailed:
-		d.dropRow(ev.File)
-		d.addActivity("✗ "+ev.File+": "+ev.Message, ev.Err)
+		d.dropRow(ev.Feed, ev.File)
+		t := toneWarning // e.g. still being written, will retry
+		if ev.Err {
+			t = toneDanger
+		}
+		d.addActivity(ev.File+": "+ev.Message, t)
+		d.refreshChart()
 		d.w.history.refreshIfVisible()
 	case relay.ScanFinished, relay.StateChanged:
 		if !ev.Quiet {
-			d.addActivity(ev.Message, ev.Err)
+			t := toneNeutral
+			if ev.Err {
+				t = toneDanger
+			}
+			d.addActivity(ev.Message, t)
 		}
 		d.render(d.w.ctl.Engine.Status())
 	}
 }
 
-func (d *dashboard) row(file string) *transferRow {
-	if r, ok := d.rows[file]; ok {
+func (d *dashboard) row(feed, file string) *transferRow {
+	key := feed + "|" + file
+	if r, ok := d.rows[key]; ok {
 		return r
 	}
+	col := feedTone(feed).color()
 	name := widget.NewLabel(file)
 	name.Truncation = fyne.TextTruncateEllipsis
-	bar := widget.NewProgressBar()
-	r := &transferRow{box: container.NewVBox(name, bar), bar: bar}
-	d.rows[file] = r
-	d.transfers.Remove(d.idle)
+	_, dot := newDot(col)
+	r := &transferRow{feed: feed, stat: newText("starting…", 12, ColorMuted, fyne.TextStyle{}), meter: newMeter(col)}
+	r.head = container.NewBorder(nil, nil, pad(0, 0, 0, 10, dot), vcenter(r.stat), tight(name))
+	r.box = vstack(8, r.head, r.meter)
+	d.rows[key] = r
 	d.transfers.Add(r.box)
-	d.activeCard.SetTitle(fmt.Sprintf("🔄  Active Transfers (%d)", len(d.rows)))
+	d.syncTransfers()
 	return r
 }
 
-func (d *dashboard) dropRow(file string) {
-	if r, ok := d.rows[file]; ok {
+func (d *dashboard) dropRow(feed, file string) {
+	key := feed + "|" + file
+	if r, ok := d.rows[key]; ok {
 		d.transfers.Remove(r.box)
-		delete(d.rows, file)
+		delete(d.rows, key)
+		d.syncTransfers()
 	}
-	if len(d.rows) == 0 && len(d.transfers.Objects) == 0 {
-		d.transfers.Add(d.idle)
-		d.activeCard.SetTitle("🔄  Active Transfers")
-	} else if len(d.rows) > 0 {
-		d.activeCard.SetTitle(fmt.Sprintf("🔄  Active Transfers (%d)", len(d.rows)))
+}
+
+// syncTransfers keeps the count badge, the empty state and the map's moving
+// streams in step with the rows.
+func (d *dashboard) syncTransfers() {
+	if n := len(d.rows); n == 0 {
+		d.activeCount.Hide()
+		d.idle.Show()
+	} else {
+		d.activeCount.Set(fmt.Sprint(n), toneInfo)
+		d.activeCount.Show()
+		d.idle.Hide()
 	}
+	d.active.Refresh()
+	d.syncStreams(d.w.ctl.Engine.Status())
+}
+
+// syncStreams tells the map which streams exist and which carry files.
+func (d *dashboard) syncStreams(s relay.Status) {
+	var fromSource, fromLocal bool
+	for _, r := range d.rows {
+		if r.feed == relay.FeedLocal {
+			fromLocal = true
+		} else {
+			fromSource = true
+		}
+	}
+	d.flow.setStream(streamSource, s.SourceEnabled, fromSource)
+	d.flow.setStream(streamLocal, s.LocalEnabled, fromLocal)
+	d.flow.setStream(streamTarget, s.TargetEnabled && (s.SourceEnabled || s.LocalEnabled), fromSource || fromLocal)
+}
+
+// refreshChart recounts the last 24 hours from the transfer journal.
+func (d *dashboard) refreshChart() {
+	now := time.Now()
+	d.chartAt = now
+	var ok, bad [24]int
+	for _, r := range d.w.ctl.Engine.History().Records() {
+		age := now.Sub(r.Time)
+		if age < 0 || age >= 24*time.Hour {
+			continue
+		}
+		i := 23 - int(age/time.Hour)
+		if r.Status == history.Failed {
+			bad[i]++
+		} else {
+			ok[i]++
+		}
+	}
+	d.chart.set(ok, bad)
+	note := "no transfers yet"
+	if peak := d.chart.peak(); peak > 0 {
+		note = fmt.Sprintf("busiest hour: %d file(s)", peak)
+	}
+	setText(d.chartNote, note, ColorMuted)
 }
 
 func (d *dashboard) poll() {
@@ -392,97 +364,112 @@ func (d *dashboard) poll() {
 	}
 }
 
-func setDot(c *canvas.Circle, col color.Color) {
-	if c.FillColor != col {
-		c.FillColor = col
-		c.Refresh()
-	}
-}
-
 func (d *dashboard) render(s relay.Status) {
 	cfg := d.w.ctl.Config()
-	d.srcRow.subtitle.SetText(fmt.Sprintf("%s  →  %s", cfg.Source.Addr(), cfg.Source.Directory))
-	if s.SourceConnected {
-		setDot(d.srcRow.dot, ColorSuccess)
-		d.srcRow.badge.SetText("Connected")
-		d.srcRow.badge.Importance = widget.SuccessImportance
-	} else {
-		setDot(d.srcRow.dot, ColorMuted)
-		d.srcRow.badge.SetText("Idle")
-		d.srcRow.badge.Importance = widget.LowImportance
-	}
 
-	switch {
-	case !s.TargetEnabled:
-		setDot(d.dstRow.dot, ColorWarning)
-		d.dstRow.subtitle.SetText("Archive-only mode (no remote target)")
-		d.dstRow.badge.SetText("Disabled")
-		d.dstRow.badge.Importance = widget.WarningImportance
-	case s.TargetConnected:
-		setDot(d.dstRow.dot, ColorSuccess)
-		d.dstRow.subtitle.SetText(fmt.Sprintf("%s  →  %s", cfg.Target.Addr(), cfg.Target.Directory))
-		d.dstRow.badge.SetText("Connected")
-		d.dstRow.badge.Importance = widget.SuccessImportance
-	default:
-		setDot(d.dstRow.dot, ColorMuted)
-		d.dstRow.subtitle.SetText(fmt.Sprintf("%s  →  %s", cfg.Target.Addr(), cfg.Target.Directory))
-		d.dstRow.badge.SetText("Idle")
-		d.dstRow.badge.Importance = widget.LowImportance
+	// What the engine is doing: the headline, the dial and the rail agree.
+	poll := cfg.Poll()
+	wait := time.Duration(0)
+	if s.Running && !s.NextScan.IsZero() {
+		wait = time.Until(s.NextScan).Round(time.Second)
 	}
-
+	var (
+		headline, sub, short string
+		t                    tone
+		dial, caption        string
+		frac                 float32
+	)
+	last := "no scan yet"
+	if !s.LastScan.IsZero() {
+		last = "last scan " + s.LastScan.Format(time.TimeOnly)
+	}
 	switch {
 	case s.Scanning:
-		setDot(d.scanRow.dot, ColorAccent)
-		d.scanRow.badge.SetText("Scanning…")
-		d.scanRow.badge.Importance = widget.HighImportance
+		headline, short, t = "Scanning for new files", "Scanning", toneInfo
+		sub = "Looking through the watched folders…"
+		dial, caption, frac = "Scan", "in progress", 1
 	case s.Running && !s.ScheduleActive:
-		setDot(d.scanRow.dot, ColorWarning)
-		d.scanRow.badge.SetText("Waiting Schedule")
-		d.scanRow.badge.Importance = widget.WarningImportance
+		headline, short, t = "Waiting for active hours", "Off hours", toneWarning
+		sub = fmt.Sprintf("Scheduled scans run between %s and %s  ·  %s", cfg.ActiveSchedule.Start, cfg.ActiveSchedule.End, last)
+		dial, caption = "Idle", "off hours"
 	case s.Running:
-		setDot(d.scanRow.dot, ColorSuccess)
-		d.scanRow.badge.SetText("Running")
-		d.scanRow.badge.Importance = widget.SuccessImportance
-	default:
-		setDot(d.scanRow.dot, ColorError)
-		d.scanRow.badge.SetText("Paused")
-		d.scanRow.badge.Importance = widget.DangerImportance
-	}
-
-	sub := fmt.Sprintf("Poll interval: %ds", cfg.PollInterval)
-	if !s.LastScan.IsZero() {
-		sub += "  ·  Last: " + s.LastScan.Format(time.TimeOnly)
-	}
-	if s.Running && !s.NextScan.IsZero() {
-		if in := time.Until(s.NextScan).Round(time.Second); in > 0 {
-			sub += fmt.Sprintf("  ·  Next: %s", in)
+		headline, short, t = "Relay is running", "Running", toneSuccess
+		sub = fmt.Sprintf("Scans every %s  ·  %s", poll, last)
+		dial, caption = "Now", "next scan"
+		if wait > 0 {
+			dial = wait.String()
+			if poll > 0 {
+				frac = 1 - float32(wait)/float32(poll)
+			}
+		} else {
+			frac = 1
 		}
+	default:
+		headline, short, t = "Relay is paused", "Paused", toneWarning
+		sub = "Nothing is picked up until you start the relay again  ·  " + last
+		dial, caption = "Paused", "not scanning"
 	}
-	d.scanRow.subtitle.SetText(sub)
+	setDot(d.stateDot, t.color())
+	setText(d.headline, headline, ColorForeground)
+	if d.subline.Text != sub {
+		d.subline.SetText(sub)
+	}
+	d.flow.setHub(dial, caption, frac, t.color())
+	d.w.setEngineState(short, t)
 
-	d.deliveredVal.Text = fmt.Sprint(s.Today.Delivered)
-	d.deliveredVal.Refresh()
+	// Stations.
+	switch {
+	case !s.SourceEnabled:
+		d.flow.source.set(false, "No source server set up", "Off", toneNeutral)
+	case s.SourceError != "":
+		d.flow.source.set(true, s.SourceError, "Unreachable", toneDanger)
+	case s.SourceConnected:
+		d.flow.source.set(true, cfg.Source.Addr()+"  ›  "+cfg.Source.Directory, "Connected", toneSuccess)
+	default:
+		d.flow.source.set(true, cfg.Source.Addr()+"  ›  "+cfg.Source.Directory, "Idle", toneNeutral)
+	}
+	switch {
+	case !s.LocalEnabled:
+		d.flow.local.set(false, "Turn on in Settings  ›  Local backup", "Off", toneNeutral)
+	case s.LocalError != "":
+		problem := strings.ToUpper(s.LocalError[:1]) + s.LocalError[1:]
+		d.flow.local.set(true, problem+"  ·  "+shortPath(cfg.LocalBackup.Directory, 20), "Unavailable", toneDanger)
+	case s.Running:
+		d.flow.local.set(true, shortPath(cfg.LocalBackup.Directory, 30), "Watching", toneSuccess)
+	default:
+		d.flow.local.set(true, shortPath(cfg.LocalBackup.Directory, 30), "Idle", toneNeutral)
+	}
+	switch {
+	case !s.TargetEnabled:
+		d.flow.target.set(false, "Archive-only: no target server", "Off", toneNeutral)
+	case s.TargetConnected:
+		d.flow.target.set(true, cfg.Target.Addr()+"  ›  "+cfg.Target.Directory, "Connected", toneSuccess)
+	default:
+		d.flow.target.set(true, cfg.Target.Addr()+"  ›  "+cfg.Target.Directory, "Idle", toneNeutral)
+	}
+	d.syncStreams(s)
 
-	d.failedVal.Text = fmt.Sprint(s.Today.Failed)
+	// Figures.
+	setText(d.relayed.value, fmt.Sprint(s.Today.Delivered), ColorForeground)
+	var failedColor color.Color = ColorForeground
 	if s.Today.Failed > 0 {
-		d.failedVal.Color = ColorError
-	} else {
-		d.failedVal.Color = ColorMuted
+		failedColor = ColorError
 	}
-	d.failedVal.Refresh()
-
-	d.volVal.Text = relay.HumanBytes(s.Today.Bytes)
-	d.volVal.Refresh()
+	setText(d.failed.value, fmt.Sprint(s.Today.Failed), failedColor)
+	setText(d.volume.value, relay.HumanBytes(s.Today.Bytes), ColorForeground)
+	if time.Since(d.chartAt) > time.Minute {
+		d.refreshChart()
+	}
 
 	if d.lastRunning == nil || *d.lastRunning != s.Running {
 		running := s.Running
 		d.lastRunning = &running
 		if running {
-			d.toggle.SetText("Pause Relay")
+			d.toggle.SetText("Pause relay")
 			d.toggle.SetIcon(theme.MediaPauseIcon())
 			d.toggle.Importance = widget.MediumImportance
 		} else {
-			d.toggle.SetText("Start Relay")
+			d.toggle.SetText("Start relay")
 			d.toggle.SetIcon(theme.MediaPlayIcon())
 			d.toggle.Importance = widget.HighImportance
 		}

@@ -65,3 +65,22 @@ func TestCorruptFileIsMovedAside(t *testing.T) {
 		t.Fatal("corrupt file should be kept for inspection")
 	}
 }
+
+func TestRetainPendingDropsOnlyStaleKeysWithPrefix(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "history.json")
+	s, _ := Open(p, 10)
+	for _, k := range []string{"local:a|1|1", "local:b|1|1", "server-file|1|1"} {
+		if err := s.MarkDelivered(k, Pending{Target: "/in/x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.RetainPending("local:", map[string]bool{"local:a|1|1": true}); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := Open(p, 10)
+	for k, want := range map[string]bool{"local:a|1|1": true, "local:b|1|1": false, "server-file|1|1": true} {
+		if _, ok := again.PendingFor(k); ok != want {
+			t.Errorf("%s present = %v, want %v", k, ok, want)
+		}
+	}
+}

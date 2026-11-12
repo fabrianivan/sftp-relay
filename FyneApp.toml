@@ -1,8 +1,8 @@
 Website = "https://github.com/fabrianivan/sftp-relay"
 
 [Details]
-  Icon = "assets/logo.png"
-  Name = "SFTP Relay"
-  ID = "id.fabrianivan.sftprelay"
-  Version = "2.0.0"
-  Build = 1
+Icon = "assets/logo.png"
+Name = "SFTP Relay"
+ID = "id.fabrianivan.sftprelay"
+Version = "2.0.0"
+Build = 8

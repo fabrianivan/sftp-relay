@@ -176,6 +176,7 @@ func run() int {
 			"mode":         mode,
 			"source":       cfg.Source.Host,
 			"target":       cfg.Target.Host,
+			"localBackup":  cfg.LocalBackupActive(),
 			"pollInterval": cfg.PollInterval,
 		})
 	}
@@ -246,9 +247,26 @@ func runHeadless(eng *relay.Engine, log *logging.Logger) int {
 
 func runCheck(path string, cfg *config.Config, store secrets.Store) int {
 	code := 0
-	roles := []string{setup.Source}
+	var roles []string
+	if cfg.Source.Enabled() {
+		roles = append(roles, setup.Source)
+	}
 	if cfg.Target.Enabled() {
 		roles = append(roles, setup.Target)
+	}
+	if cfg.LocalBackup.Enabled {
+		fmt.Printf("%-6s %s ... ", "local", cfg.LocalBackup.Directory)
+		res, err := setup.TestLocal(cfg)
+		switch {
+		case err != nil:
+			fmt.Printf("FAILED\n       %v\n", err)
+			code = 1
+		case !res.Writable && !cfg.LocalBackup.Keep():
+			fmt.Printf("FAILED\n       the folder is read-only, so files cannot be moved to %q after upload\n", cfg.LocalBackup.ArchiveFolder)
+			code = 1
+		default:
+			fmt.Printf("OK\n       %d file(s), %d match the include/exclude rules\n", res.Files, res.Matching)
+		}
 	}
 	for _, role := range roles {
 		ep := setup.Endpoint(cfg, role)

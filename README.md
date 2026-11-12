@@ -25,6 +25,7 @@ Many integrations still exchange files over SFTP: a partner drops reports into a
 ## Features
 
 - **Relay + archive** — new files are copied from the source folder to the target folder, then moved into `<archive>/<YYYY-MM-DD>/` on the source (never overwriting: `name_1.csv`, `name_2.csv`, …).
+- **Local backup** — a folder on this computer can be uploaded to the same target, next to the source server or on its own. Files stay where they are and are uploaded again whenever they change (or, if you prefer, are moved to an archive subfolder once delivered).
 - **Verified, atomic delivery** — uploads stream to a temporary name, are checked with SHA-256, then renamed into place (`posix-rename` when the server supports it), so readers on the target never see partial files.
 - **Never loses a file** — a file is only archived after it has been delivered and verified. If the target is down, it stays in the source folder and is retried.
 - **Waits for writers to finish** — a file is picked up only once its size and modification time stop changing.
@@ -74,8 +75,9 @@ The config file is `./config.json` if it exists, otherwise the per-user config f
 
 | Key | Default | Meaning |
 |---|---|---|
-| `sourceSFTP` / `targetSFTP` | — | `host`, `port` (22), `username`, `directory`, optional `privateKeyPath`, `expectedFingerprint`. Leave the target host empty for archive-only mode. |
+| `sourceSFTP` / `targetSFTP` | — | `host`, `port` (22), `username`, `directory`, optional `privateKeyPath`, `expectedFingerprint`. Leave the target host empty for archive-only mode, or the source host empty to run a local backup only. |
 | `backupDirectory` | — | Archive folder on the source server; files go into dated subfolders. |
+| `localBackup` | off | `{enabled, directory, targetDirectory, afterUpload, archiveFolder}` — upload a folder on this computer to the target. See [Local backup](#local-backup). |
 | `pollInterval` | `30` | Seconds between scans (minimum 5). |
 | `stableSeconds` | `10` | A file must be unchanged this long before it is picked up (`-1` disables). |
 | `maxParallel` | `2` | Concurrent transfers (1–16). |
@@ -90,6 +92,26 @@ The config file is `./config.json` if it exists, otherwise the per-user config f
 | `historyFile`, `historyLimit` | `history.json`, `1000` | Transfer journal shown in the History tab. |
 
 Config files from **SFTP Watchdog** (this project's previous name) load as-is; legacy keys are migrated on the next save.
+
+### Local backup
+
+SFTP Relay can also send files from a folder on this computer to the target server — together with the source server, or instead of it (leave `sourceSFTP.host` empty).
+
+```json
+"localBackup": {
+  "enabled": true,
+  "directory": "/Users/me/Exports",
+  "targetDirectory": "/inbox/laptop",
+  "afterUpload": "keep"
+}
+```
+
+- `directory` — full path of the folder. Only files directly in it are picked up, not its subfolders. The include/exclude patterns, the stability wait, checksum verification and the schedule apply as usual.
+- `targetDirectory` — folder on the target server. Leave it out to use the target's own `directory`.
+- `afterUpload: "keep"` (default) — the file stays where it is. The folder is opened read-only, each version is uploaded once, and a file is uploaded again when its size or modification time changes. Deleting a local file does not delete its copy on the target.
+- `afterUpload: "archive"` — once delivered and verified, the file is moved to `<directory>/<archiveFolder>/<YYYY-MM-DD>/` (`archiveFolder` defaults to `archive`).
+
+In the app: **Settings → Local backup**, with a *Check folder* button. `-check` on the command line verifies the folder too.
 
 ### Audit Logging
 

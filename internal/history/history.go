@@ -1,8 +1,9 @@
 // Package history keeps a persistent journal of relayed files.
 //
 // Besides powering the History tab, it remembers files that were delivered
-// but could not be archived yet, so a retry only archives them instead of
-// uploading them a second time.
+// but are still in their folder: files that could not be archived yet (a
+// retry only archives them instead of uploading them a second time) and
+// local backups, whose originals stay in place by design.
 package history
 
 import (
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,6 +37,10 @@ type Record struct {
 	Target     string    `json:"target,omitempty"`
 	Archive    string    `json:"archive,omitempty"`
 	Error      string    `json:"error,omitempty"`
+
+	// Source is "local" for files backed up from a local folder and empty
+	// for files relayed from the source server.
+	Source string `json:"source,omitempty"`
 }
 
 // Duration returns the transfer time.
@@ -130,6 +136,25 @@ func (s *Store) ClearPending(key string) error {
 		return nil
 	}
 	delete(s.st.Pending, key)
+	return s.saveLocked()
+}
+
+// RetainPending forgets entries whose key starts with prefix and is not in
+// keep. Local backups use it to drop the marks of files that have changed or
+// are gone, so the set never grows beyond the files that are in the folder.
+func (s *Store) RetainPending(prefix string, keep map[string]bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := false
+	for k := range s.st.Pending {
+		if strings.HasPrefix(k, prefix) && !keep[k] {
+			delete(s.st.Pending, k)
+			removed = true
+		}
+	}
+	if !removed {
+		return nil
+	}
 	return s.saveLocked()
 }
 

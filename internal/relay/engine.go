@@ -1,5 +1,6 @@
 // Package relay is the core of SFTP Relay: it scans the source folder,
 // copies new files to the target, verifies them, and archives the originals.
+// A folder on this computer can be backed up to the same target as well.
 //
 // Safety rules enforced here:
 //   - A file is only archived after it has been fully delivered and verified.
@@ -8,13 +9,18 @@
 //   - Each file is processed by at most one worker at a time.
 //   - Uploads go to a temporary name and are renamed into place, so readers
 //     on the target never see partial files.
+//   - A local backup in keep mode opens its folder read-only: the files on
+//     this computer are never moved, renamed or deleted.
 package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,8 +34,9 @@ import (
 // Runtime is the configuration and connections an engine works with.
 type Runtime struct {
 	Config *config.Config
-	Source *sftpclient.Conn
+	Source *sftpclient.Conn // nil = no source server (local backup only)
 	Target *sftpclient.Conn // nil = archive-only mode
+	Local  *sftpclient.Conn // nil = local backup off
 }
 
 // Options for New.
@@ -64,9 +71,13 @@ type Counters struct {
 type Status struct {
 	Running         bool
 	Scanning        bool
+	SourceEnabled   bool
 	TargetEnabled   bool
+	LocalEnabled    bool // a local folder is backed up to the target
 	SourceConnected bool
 	TargetConnected bool
+	SourceError     string // why the last scan of the source folder failed ("" = it worked)
+	LocalError      string // why the last scan of the local folder failed
 	ScheduleActive  bool
 	LastScan        time.Time
 	NextScan        time.Time
@@ -76,7 +87,29 @@ type Status struct {
 
 type state struct {
 	Runtime
-	sem chan struct{}
+	feeds []*feed
+	sem   chan struct{}
+}
+
+// remotes lists the server connections that are configured.
+func (s *state) remotes() []*sftpclient.Conn {
+	var out []*sftpclient.Conn
+	for _, c := range []*sftpclient.Conn{s.Source, s.Target} {
+		if c != nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// closeAll ends every session, including the local folder's.
+func (s *state) closeAll() {
+	for _, c := range s.remotes() {
+		c.Close()
+	}
+	if s.Local != nil {
+		s.Local.Close()
+	}
 }
 
 // Engine runs scans on a schedule and relays files.
@@ -97,7 +130,8 @@ type Engine struct {
 	stopLoop   context.CancelFunc
 	loopDone   chan struct{}
 	inflight   map[string]struct{}
-	ensured    map[string]bool // backup dirs known to exist
+	ensured    map[string]bool   // backup dirs known to exist
+	feedErr    map[string]string // last listing error per feed
 	scanning   bool
 	lastScan   time.Time
 	nextScan   time.Time
@@ -136,6 +170,7 @@ func New(o Options) *Engine {
 		st:       newState(o.Runtime),
 		inflight: map[string]struct{}{},
 		ensured:  map[string]bool{},
+		feedErr:  map[string]string{},
 		tracker:  newTracker(),
 	}
 }
@@ -145,7 +180,7 @@ func newState(rt Runtime) *state {
 	if n < 1 {
 		n = 1
 	}
-	return &state{Runtime: rt, sem: make(chan struct{}, n)}
+	return &state{Runtime: rt, feeds: feedsFor(rt), sem: make(chan struct{}, n)}
 }
 
 func (e *Engine) state() *state {
@@ -214,11 +249,7 @@ func (e *Engine) Shutdown(timeout time.Duration) {
 	case <-time.After(timeout):
 		e.log.Warnf("Shutdown: transfers did not stop within %s", timeout)
 	}
-	st := e.state()
-	st.Source.Close()
-	if st.Target != nil {
-		st.Target.Close()
-	}
+	e.state().closeAll()
 	e.bus.close()
 }
 
@@ -238,14 +269,12 @@ func (e *Engine) Reconfigure(rt Runtime) {
 	old := e.st
 	e.st = newState(rt)
 	e.ensured = map[string]bool{}
+	e.feedErr = map[string]string{}
 	e.mu.Unlock()
 	e.tracker = newTracker()
 	e.scanMu.Unlock()
 
-	old.Source.Close()
-	if old.Target != nil {
-		old.Target.Close()
-	}
+	old.closeAll()
 	e.log.Infof("Configuration applied")
 	e.publish(Event{Kind: StateChanged, Message: "Configuration applied"})
 	if wasRunning {
@@ -278,11 +307,9 @@ func (e *Engine) RunOnce(ctx context.Context) (Summary, error) {
 	if !ok {
 		return Summary{}, fmt.Errorf("a scan is already running")
 	}
-	if b.err != nil {
-		return b.sum, b.err
-	}
+	// One folder may fail to list while the other still has files to process.
 	b.wg.Wait()
-	return b.summary(), nil
+	return b.summary(), b.err
 }
 
 // Status returns a snapshot for display.
@@ -292,7 +319,10 @@ func (e *Engine) Status() Status {
 	s := Status{
 		Running:        e.running,
 		Scanning:       e.scanning,
+		SourceEnabled:  st.Source != nil,
 		TargetEnabled:  st.Target != nil,
+		SourceError:    e.feedErr[FeedSource],
+		LocalError:     e.feedErr[FeedLocal],
 		LastScan:       e.lastScan,
 		NextScan:       e.nextScan,
 		Today:          e.today,
@@ -305,7 +335,14 @@ func (e *Engine) Status() Status {
 	if s.Today.Day != e.now().Format("2006-01-02") {
 		s.Today = Counters{Day: e.now().Format("2006-01-02")}
 	}
-	s.SourceConnected = st.Source.Connected()
+	for _, f := range st.feeds {
+		if f.local() {
+			s.LocalEnabled = true
+		}
+	}
+	if st.Source != nil {
+		s.SourceConnected = st.Source.Connected()
+	}
 	if st.Target != nil {
 		s.TargetConnected = st.Target.Connected()
 	}
@@ -346,11 +383,14 @@ func (e *Engine) loop(ctx context.Context, done chan struct{}) {
 		}
 		if max := st.Config.MaxIdleScans; max > 0 && idle >= max {
 			idle = 0
-			if st.Source.Connected() || (st.Target != nil && st.Target.Connected()) {
+			open := false
+			for _, c := range st.remotes() {
+				open = open || c.Connected()
+			}
+			if open {
 				e.log.Infof("No new files in %d scans — closing idle sessions (they reopen automatically)", max)
-				st.Source.Close()
-				if st.Target != nil {
-					st.Target.Close()
+				for _, c := range st.remotes() {
+					c.Close()
 				}
 			}
 		}
@@ -430,56 +470,78 @@ func (e *Engine) scan(ctx context.Context, manual bool) (*batch, bool) {
 	}()
 	e.publish(Event{Kind: ScanStarted, Message: kind + " scan started"})
 
-	dir := cfg.Source.Directory
-	var entries []fileInfo
-	err := st.Source.Do(ctx, retryPolicy(cfg), func(cl sftpClient) error {
-		list, err := cl.ReadDir(dir)
-		if err != nil {
-			return err
-		}
-		entries = entries[:0]
-		for _, fi := range list {
-			entries = append(entries, fi)
-		}
-		return nil
-	})
-	if err != nil {
-		b.err = fmt.Errorf("list %s on source: %w", dir, err)
-		e.log.Errorf("%s scan failed: %v", kind, b.err)
-		e.publish(Event{Kind: ScanFinished, Message: "Scan failed: " + err.Error(), Err: true})
-		return b, true
-	}
-
 	now := e.now()
 	stable := time.Duration(cfg.StableSeconds) * time.Second
-	seen := make(map[string]bool, len(entries))
-	for _, fi := range entries {
-		if !fi.Mode().IsRegular() || !cfg.Matches(fi.Name()) {
+	seen := map[string]bool{}
+	var failed []error
+	for _, f := range st.feeds {
+		entries, err := e.list(ctx, f)
+		e.setFeedErr(f.id, err)
+		if err != nil {
+			err = fmt.Errorf("list %s on %s: %w", f.shown(), f.label(), err)
+			failed = append(failed, err)
+			e.log.Errorf("%s scan failed: %v", kind, err)
 			continue
 		}
-		name := fi.Name()
-		seen[name] = true
-		if e.isInflight(name) {
-			continue
+		// In backup mode files stay in the folder, so the delivery journal
+		// decides which versions still need to go to the target.
+		var present map[string]bool
+		if f.keep() {
+			present = make(map[string]bool, len(entries))
 		}
-		if !e.tracker.ready(name, fi.Size(), fi.ModTime(), now, stable) {
-			b.sum.Waiting++
-			e.log.Debugf("Waiting for %s to finish writing", name)
-			continue
+		for _, fi := range entries {
+			if !fi.Mode().IsRegular() || !cfg.Matches(fi.Name()) {
+				continue
+			}
+			ref := f.ref(fi.Name())
+			seen[ref] = true
+			if present != nil {
+				key := f.key(fi)
+				present[key] = true
+				if _, done := e.hist.PendingFor(key); done {
+					continue // this version is already on the target
+				}
+			}
+			if e.isInflight(ref) {
+				continue
+			}
+			if !e.tracker.ready(ref, fi.Size(), fi.ModTime(), now, stable) {
+				b.sum.Waiting++
+				e.log.Debugf("Waiting for %s to finish writing", fi.Name())
+				continue
+			}
+			b.sum.Found++
+			e.dispatch(st, f, fi, b)
 		}
-		b.sum.Found++
-		e.dispatch(st, fi, b)
+		if present != nil {
+			// Forget versions that changed or are gone, so they upload again if they return.
+			if err := e.hist.RetainPending(localPrefix, present); err != nil {
+				e.log.Warnf("Could not save history: %v", err)
+			}
+		}
 	}
-	e.tracker.prune(seen)
+	if len(failed) > 0 {
+		b.err = errors.Join(failed...)
+		if len(failed) == len(st.feeds) {
+			e.publish(Event{Kind: ScanFinished, Message: "Scan failed: " + failed[0].Error(), Err: true})
+			return b, true
+		}
+		for _, err := range failed {
+			e.publish(Event{Kind: StateChanged, Message: "Scan failed: " + err.Error(), Err: true})
+		}
+	} else {
+		e.tracker.prune(seen)
+	}
 
 	msg := fmt.Sprintf("%s scan: %d new file(s)", kind, b.sum.Found)
 	if b.sum.Waiting > 0 {
 		msg += fmt.Sprintf(", %d still being written", b.sum.Waiting)
 	}
+	where := scanned(st.feeds)
 	if b.sum.Found > 0 || manual {
-		e.log.Infof("%s in %s", msg, path.Clean(dir))
+		e.log.Infof("%s in %s", msg, where)
 	} else {
-		e.log.Debugf("%s in %s", msg, path.Clean(dir))
+		e.log.Debugf("%s in %s", msg, where)
 	}
 	e.publish(Event{Kind: ScanFinished, Message: msg, Quiet: !manual && b.sum.Found == 0 && b.sum.Waiting == 0})
 
@@ -490,6 +552,49 @@ func (e *Engine) scan(ctx context.Context, manual bool) (*batch, bool) {
 		}()
 	}
 	return b, true
+}
+
+// list returns the entries of a feed's folder.
+func (e *Engine) list(ctx context.Context, f *feed) ([]fileInfo, error) {
+	var entries []fileInfo
+	err := f.conn.Do(ctx, f.retry(), func(cl sftpClient) error {
+		list, err := cl.ReadDir(f.dir())
+		if err != nil {
+			return err
+		}
+		entries = append(entries[:0], list...)
+		return nil
+	})
+	return entries, err
+}
+
+func (e *Engine) setFeedErr(id string, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	switch {
+	case err == nil:
+		delete(e.feedErr, id)
+	case id == FeedLocal && errors.Is(err, os.ErrNotExist):
+		e.feedErr[id] = "folder not found"
+	default:
+		e.feedErr[id] = err.Error()
+	}
+}
+
+// scanned names the folders of a scan for the log.
+func scanned(feeds []*feed) string {
+	names := make([]string, 0, len(feeds))
+	for _, f := range feeds {
+		if f.local() {
+			names = append(names, f.shown())
+		} else {
+			names = append(names, path.Clean(f.shown()))
+		}
+	}
+	if len(names) == 0 {
+		return "no folder (nothing is configured to scan)"
+	}
+	return strings.Join(names, " and ")
 }
 
 func (e *Engine) reportBatch(st *state, s Summary) {
@@ -516,8 +621,8 @@ func (e *Engine) isInflight(name string) bool {
 	return ok
 }
 
-func (e *Engine) dispatch(st *state, fi fileInfo, b *batch) {
-	name := fi.Name()
+func (e *Engine) dispatch(st *state, f *feed, fi fileInfo, b *batch) {
+	name := f.ref(fi.Name())
 	e.mu.Lock()
 	e.inflight[name] = struct{}{}
 	e.mu.Unlock()
@@ -543,7 +648,7 @@ func (e *Engine) dispatch(st *state, fi fileInfo, b *batch) {
 			return
 		}
 		defer func() { <-st.sem }()
-		b.add(e.process(e.ctx, st, fi))
+		b.add(e.process(e.ctx, st, f, fi))
 	}()
 }
 
